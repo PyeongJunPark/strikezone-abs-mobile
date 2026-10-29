@@ -1,6 +1,9 @@
 """Adapter for Ultralytics COCO 17-joint Pose output."""
 from .zone import JOINTS
 
+ALL_JOINTS = dict(JOINTS, left_elbow=7, right_elbow=8, left_wrist=9,
+                 right_wrist=10, left_ankle=15, right_ankle=16, nose=0)
+
 
 class PoseDetector:
     def __init__(self, model, device='cpu', imgsz=640):
@@ -20,5 +23,5 @@ class PoseDetector:
         confidence = result.keypoints.conf.cpu().tolist()
         # Ultralytics returns boxes/keypoints restored to the input frame size.
         return [dict(bbox_xyxy=box, keypoints={name: dict(xy=points[index],
-                    confidence=scores[index]) for name, index in JOINTS.items()})
+                    confidence=scores[index]) for name, index in ALL_JOINTS.items()})
                 for box, points, scores in zip(boxes, xy, confidence)]
