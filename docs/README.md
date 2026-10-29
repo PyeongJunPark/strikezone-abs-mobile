@@ -10,3 +10,6 @@
 - [데이터·모델 관리 규칙](data-management.md): 저장 위치·라벨·분할·버전
 
 - [분석 계약 v1](analysis-contracts.md): 모듈 입출력·존 근사식·상태·판정 제한
+
+- [초기 테스트 자료 v1](testset-v001.md) / [촬영 가이드](capture-guide.md)
+- [포인터 보정·수동 라벨](manual-labeling.md): 6개 영상의 38개 선택 프레임, 분석 입력과 검토 화면
