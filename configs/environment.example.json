@@ -1,0 +1,8 @@
+{
+  "video": "data/local/sample.mp4",
+  "model": "models/yolo11s-pose.pt",
+  "device": "cpu",
+  "frames": 3,
+  "imgsz": 640,
+  "output": "outputs/environment-check.json"
+}
