@@ -1,0 +1,73 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>스트존 · 기준 프레임과 존 고정</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101923;color:#e7edf4;font:15px/1.5 system-ui,sans-serif}header{padding:20px 28px;border-bottom:1px solid #344353}h1{font-size:23px;margin:0}p{color:#afbfce;margin:8px 0}main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;padding:24px;max-width:1500px;margin:auto}.panel{background:#1a2937;padding:18px;border-radius:12px}svg{width:100%;max-height:72vh;background:#080e14}input,button,select{font:inherit}button,select,input[type=number]{padding:8px;border:1px solid #4a6377;border-radius:6px;background:#243a4b;color:#eff7ff}button{cursor:pointer}button:hover{background:#385b71}button.primary{background:#12676b}button:disabled{opacity:.4;cursor:default}input[type=number]{width:100%}input[type=range]{width:100%}.row{display:flex;gap:8px;margin:10px 0}.row>*{flex:1}label{display:block;margin:10px 0}h2{font-size:17px;margin:12px 0}#message{min-height:24px;color:#ffcc85}#status{font-weight:700;color:#78e1bd}small{color:#acbdcb}#recommend{width:100%}a{color:#9edbff}#details{white-space:pre-wrap;font-size:12px;max-height:230px;overflow:auto}@media(max-width:850px){main{grid-template-columns:1fr}}
+</style>
+<header><h1>기준 프레임 선택 → 스트라이크존 고정</h1><p>포인터 보정본 · 수동 가로 기준 · 2D 시제품 — 실제 스트라이크/볼 판정은 하지 않습니다.</p></header>
+<main><section class="panel"><div class="row"><strong id="frameText"></strong><span id="status"></span></div>
+<svg id="view" role="img" aria-label="고정 스트라이크존 미리보기"><image id="picture"/><g id="joints"></g><rect id="zone" fill="#26e9c419" stroke="#4df1cb" stroke-width="3"/><text id="zoneLabel" fill="#62ffde" font-size="16"></text></svg>
+<input id="seek" type="range" min="0" value="0" aria-label="프레임 이동"><div class="row"><button id="previous">이전</button><button id="play">미리보기 재생</button><button id="next">다음</button></div>
+<small>재생은 확인용 10장/초입니다. 원본 시간·공 속도를 나타내지 않습니다. 초록 사각형은 고정 존, 점은 현재 프레임 관절입니다.</small><p id="poseInfo"></p><p id="message" role="status"></p></section>
+<aside class="panel"><h2>1. 투구 시작 감지</h2><label><input id="auto" type="checkbox"> 투수 움직임 감지 시 존 자동 고정</label><p id="autoInfo"></p><label>투구 동작 시작 후보 / 수동 경계<input id="release" type="number" step="1"></label><label>투구 종료 프레임<input id="end" type="number" step="1"></label><label>추천 기준 프레임<select id="recommend"></select></label><small id="candidateInfo"></small>
+<h2>2. 존 범위</h2><div class="row"><label>왼쪽 x<input id="left" type="number" step="1"></label><label>오른쪽 x<input id="right" type="number" step="1"></label></div>
+<label><input id="manual" type="checkbox"> 높이 직접 보정</label><div class="row"><label>위쪽 y<input id="top" type="number" step="0.1" disabled></label><label>아래쪽 y<input id="bottom" type="number" step="0.1" disabled></label></div>
+<button class="primary" id="lock">현재 프레임으로 존 고정</button><p><small>관절이 유효하면 어깨·골반 중간부터 무릎까지 계산합니다. 폭은 홈플레이트 자동 인식값이 아닙니다.</small></p>
+<h2>3. 유지와 재설정</h2><div class="row"><button id="start">투구 시작</button><button id="finish">투구 종료</button></div><button id="reset">새 투구 / 다시 설정</button><div class="row"><button id="camera">카메라 이동 표시</button><button id="cut">화면 전환 표시</button></div><small>카메라 이동·화면 전환은 직접 표시하면 존이 무효화됩니다. 자동 감지 기능은 아닙니다.</small>
+<div class="row"><button id="save">설정·결과 저장</button><button id="restore">설정 불러오기</button></div><input type="file" id="file" accept="application/json" hidden><details><summary>저장할 결과 확인</summary><pre id="details"></pre></details></aside></main>
+<script>/*__STATE__*/</script><script>
+'use strict';
+const DATA=/*__DATA__*/;
+const $=id=>document.getElementById(id), frames=DATA.frames, machine=new FixedZone(DATA.video_id);
+let index=0,timer=null,events=[],autoApplied=false;
+const stateNames={idle:'기준 선택 중',ready:'존 고정됨',tracking:'투구 중 · 존 유지',completed:'투구 종료 · 존 유지',cancelled:'재설정 필요'};
+function current(){return frames[index];}
+function number(id){return $(id).value.trim()===''?NaN:Number($(id).value);}
+function say(message){$('message').textContent=message;}
+function payload(){return {schema_version:'fixed-zone-review-v1',video_id:DATA.video_id,input_manifest_sha256:DATA.input_manifest_sha256,model_sha256:DATA.model_sha256,config:DATA.config,settings:{release:number('release'),end:number('end'),left:number('left'),right:number('right'),manual:$('manual').checked,top:number('top'),bottom:number('bottom')},selection_frame:current().frame_index,...machine.snapshot(),history:machine.history,events,automatic_detection:DATA.automatic,automatic_enabled:$('auto').checked,final_judgment:'unjudgeable',final_judgment_reason:'unvalidated_geometry'};}
+function render(){
+ const f=current();
+ if($('auto').checked && DATA.automatic?.status==='ok'){
+   const a=DATA.automatic, confirmation=a.event.confirmed_frame_index;
+   const broken=frames.some(x=>x.frame_index<=f.frame_index && x.pitch_start?.state==='interrupted');
+   if(broken){if(machine.zone)machine.invalidate('automatic_background_or_gap_guard');autoApplied=true;}
+   else if(!autoApplied && f.frame_index>=confirmation){
+     const ref=frames.find(x=>x.frame_index===a.reference_frame_index);
+     try{machine.autoLock(ref,number('left'),number('right'),a.event,number('end'));say(`시작 후보 ${a.event.onset_frame_index} → 확인 ${confirmation} → 기준 ${ref.frame_index} 자동 고정`);}catch(e){say(e.message);}
+     autoApplied=true;
+   }
+ }
+ $('seek').value=index;$('frameText').textContent=`${DATA.video_id} · 프레임 ${f.frame_index} (${index+1}/${frames.length})`;
+ $('view').setAttribute('viewBox',`0 0 ${f.image_width} ${f.image_height}`);$('picture').setAttribute('href',f.preview);$('picture').setAttribute('width',f.image_width);$('picture').setAttribute('height',f.image_height);
+ $('joints').replaceChildren();for(const p of Object.values(f.pose.keypoints)){const c=document.createElementNS('http://www.w3.org/2000/svg','circle');c.setAttribute('cx',p.xy[0]);c.setAttribute('cy',p.xy[1]);c.setAttribute('r',4);c.setAttribute('fill',p.confidence>=DATA.config.threshold?'#69caff':'#ff8866');$('joints').append(c);}
+ const z=machine.visible(f);$('zone').style.display=z?'':'none';$('zoneLabel').textContent=z?`고정 기준: ${z.reference_frame_index}`:'';
+ if(z){const [l,t,r,b]=z.bbox_xyxy;for(const [k,v] of Object.entries({x:l,y:t,width:r-l,height:b-t}))$('zone').setAttribute(k,v);$('zoneLabel').setAttribute('x',l);$('zoneLabel').setAttribute('y',Math.max(18,t-8));}
+ if(!$('manual').checked){$('top').value=f.pose.top_y===null?'':f.pose.top_y.toFixed(1);$('bottom').value=f.pose.bottom_y===null?'':f.pose.bottom_y.toFixed(1);}
+ $('status').textContent=stateNames[machine.state];$('poseInfo').textContent=f.pose.status==='ok'?`현재 관절: 유효 · 최저 점수 ${f.pose.confidence.toFixed(2)}${f.duplicate_of_previous?' · 직전과 동일한 이미지':''}`:`현재 관절: ${f.pose.reason} — 고정 전에는 다른 기준을 선택하세요. 고정 후에는 기존 존을 유지합니다.`;
+ $('start').disabled=machine.state!=='ready';$('finish').disabled=machine.state!=='tracking';$('lock').disabled=['tracking','completed'].includes(machine.state);$('details').textContent=JSON.stringify(payload(),null,2);
+}
+function stop(){clearInterval(timer);timer=null;$('play').textContent='미리보기 재생';}
+function invalidate(reason){stop();$('auto').checked=false;machine.invalidate(reason);events.push({frame_index:current().frame_index,event:reason});say('존을 해제했습니다. 기준을 다시 선택하세요.');render();}
+function recommend(){
+ const boundary=number('release');const ranked=[];let prev=null;
+ for(const f of frames){if(f.frame_index>=boundary)break;if(f.pose.status==='ok'&&!f.duplicate_of_previous){const delta=prev&&prev.frame_index+1===f.frame_index&&prev.pose.status==='ok'?Math.max(Math.abs(f.pose.top_y-prev.pose.top_y),Math.abs(f.pose.bottom_y-prev.pose.bottom_y)):null;ranked.push({f,delta,score:f.pose.confidence-(delta===null?.15:Math.min(.4,delta/f.image_height*5))});}prev=f;}
+ ranked.sort((a,b)=>b.score-a.score||a.f.frame_index-b.f.frame_index);$('recommend').replaceChildren();
+ for(const r of ranked){const o=document.createElement('option');o.value=r.f.frame_index;o.textContent=`프레임 ${r.f.frame_index} · 관절 ${r.f.pose.confidence.toFixed(2)} · ${r.delta===null?'연속 비교 없음':`높이 변화 ${r.delta.toFixed(1)}px`}`;$('recommend').append(o);}
+ $('candidateInfo').textContent=ranked.length?'시작 경계 이전의 관절 점수·높이 안정성 기준입니다. 자동 모드는 시작 후보 직전의 유효 자세를 고정합니다.':'추천 가능한 관절이 없습니다. 경계를 확인하거나 수동으로 보정하세요.';
+ return ranked;
+}
+function action(fn){try{fn();render();}catch(e){say(e.message);render();}}
+$('seek').oninput=()=>{stop();index=Number($('seek').value);render();};$('previous').onclick=()=>{stop();index=Math.max(0,index-1);render();};$('next').onclick=()=>{stop();index=Math.min(frames.length-1,index+1);render();};
+$('play').onclick=()=>{if(timer){stop();return;}if(index===frames.length-1)index=0;$('play').textContent='일시정지';timer=setInterval(()=>{if(index>=frames.length-1){stop();return;}index++;render();},100);};
+$('recommend').onchange=()=>{stop();index=frames.findIndex(f=>f.frame_index===Number($('recommend').value));render();};
+for(const id of ['release','end','left','right','top','bottom'])$(id).onchange=()=>{invalidate('settings_changed');if(id==='release')recommend();};
+$('manual').onchange=()=>{for(const id of ['top','bottom'])$(id).disabled=!$('manual').checked;invalidate('height_mode_changed');};
+$('lock').onclick=()=>action(()=>{stop();$('auto').checked=false;machine.lock(current(),number('left'),number('right'),number('release'),$('manual').checked?[number('top'),number('bottom')]:null,number('end'));say('존을 고정했습니다. 다른 프레임으로 이동해 유지되는지 확인하세요.');});
+$('start').onclick=()=>action(()=>{machine.start();say('투구 중에는 존이 바뀌지 않습니다.');});$('finish').onclick=()=>action(()=>{stop();machine.finish();say('투구를 종료했습니다. 다음 투구는 새 투구 버튼으로 시작하세요.');});
+$('reset').onclick=()=>{stop();$('auto').checked=false;machine.reset();events.push({event:'new_pitch',frame_index:current().frame_index});say('새 투구의 기준을 선택하세요.');render();};$('camera').onclick=()=>invalidate('camera_moved');$('cut').onclick=()=>invalidate('scene_changed');
+$('save').onclick=()=>{const blob=new Blob([JSON.stringify(payload(),null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${DATA.video_id}-zone.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);say('현재 설정·고정 존·변경 이력을 JSON으로 저장했습니다.');};
+$('restore').onclick=()=>$('file').click();$('file').onchange=async()=>{const file=$('file').files[0];if(!file)return;try{const saved=JSON.parse(await file.text());if(saved.video_id!==DATA.video_id||saved.input_manifest_sha256!==DATA.input_manifest_sha256||saved.model_sha256!==DATA.model_sha256)throw Error('같은 입력 자료·모델의 설정만 불러올 수 있습니다.');stop();$('auto').checked=false;machine.reset('import_settings');for(const id of ['release','end','left','right','top','bottom'])$(id).value=saved.settings[id]??'';$('manual').checked=!!saved.settings.manual;for(const id of ['top','bottom'])$(id).disabled=!$('manual').checked;const ref=saved.zone?.reference_frame_index??saved.selection_frame;index=frames.findIndex(f=>f.frame_index===ref);if(index<0){index=0;throw Error('기준 프레임이 현재 자료에 없습니다.');}recommend();say('설정을 불러왔습니다. 기준 화면을 확인하고 다시 존을 고정하세요.');render();}catch(e){say(e.message);render();}};
+$('auto').onchange=()=>{stop();machine.reset('auto_mode_changed');autoApplied=false;index=0;render();};
+ $('auto').checked=!!DATA.automatic;$('auto').disabled=!DATA.automatic;
+ $('autoInfo').textContent=DATA.automatic?(DATA.automatic.status==='ok'?`시작 후보 ${DATA.automatic.event.onset_frame_index}, 확인 ${DATA.automatic.event.confirmed_frame_index}, 고정 기준 ${DATA.automatic.reference_frame_index}. 공 릴리스는 아직 확인하지 않습니다.`:`자동 고정 불가: ${DATA.automatic.reason}`):'수동 모드입니다. 투수 영역을 지정해 자동 분석을 생성하세요.';
+ $('seek').max=frames.length-1;$('release').value=DATA.config.release_frame??'';$('end').value=frames.at(-1).frame_index;$('left').value=DATA.config.zone_x[0];$('right').value=DATA.config.zone_x[1];const ranked=recommend();if(!DATA.automatic&&ranked.length)index=frames.findIndex(f=>f.frame_index===ranked[0].f.frame_index);render();
+</script></html>

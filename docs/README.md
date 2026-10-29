@@ -13,3 +13,4 @@
 
 - [초기 테스트 자료 v1](testset-v001.md) / [촬영 가이드](capture-guide.md)
 - [포인터 보정·수동 라벨](manual-labeling.md): 6개 영상의 38개 선택 프레임, 분석 입력과 검토 화면
+- [기준 프레임·존 고정](fixed-zone-preview.md): 기준 추천, 수동 보정, 사각형 존 고정 및 결과 저장
