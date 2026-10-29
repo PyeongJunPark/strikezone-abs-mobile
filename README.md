@@ -146,7 +146,7 @@ flowchart TD
 
 ## 프로젝트 구조
 
-현재는 구조와 안내 문서만 구성했으며 실행 기능은 구현 전입니다. 모델 학습은 로컬 GPU에서 진행하고 Colab은 필수가 아닙니다.
+현재 환경 확인용 Android 앱과 영상·모델 검사 스크립트를 제공합니다. 촬영·통신·판정 기능은 구현 전입니다. 모델 학습은 로컬 GPU에서 진행하고 Colab은 필수가 아닙니다.
 
 ```text
 android/                  # Kotlin 촬영·화면·음성 앱
@@ -159,7 +159,7 @@ server/
     transport/            # 앱 통신
     common/               # 공유 데이터 형식·유틸리티
   tests/                  # 단위·통합 검증
-  requirements.txt        # 의존성 확정 전 안내용 파일
+  requirements.txt        # Python 직접 의존성 버전
 experiments/              # 로컬 GPU 학습·실험
 configs/                  # 공유 설정 예시
 data/                     # 영상·라벨 안내
@@ -178,4 +178,4 @@ docs/                     # 통신·좌표 설계
 
 ## 실행 안내
 
-설치 및 실행 방법은 서버와 안드로이드 앱의 구성이 확정된 뒤 추가할 예정입니다.
+[개발 환경 안내](docs/development.md)에 Python CPU/GPU 설치, 영상·모델 검사, Android 빌드·실기기 실행 절차를 정리했습니다. [검증 기록](docs/environment-validation.md)에서 실제 확인 범위를 확인하세요.

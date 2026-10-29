@@ -1,2 +1,6 @@
-# Dependencies and versions will be defined in issue #3.
-# This placeholder does not constitute a runnable environment.
+# Install torch/torchvision first from the CPU or cu128 index (see docs/development.md).
+torch==2.11.0
+torchvision==0.26.0
+ultralytics==8.4.107
+opencv-python==4.13.0.92
+numpy==2.2.6

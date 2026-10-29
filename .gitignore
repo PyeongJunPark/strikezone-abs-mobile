@@ -1,0 +1,27 @@
+# Local environments and secrets
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+# Android
+.gradle/
+.kotlin/
+**/build/
+local.properties
+*.jks
+*.keystore
+# Local settings and generated artifacts
+configs/*.local.json
+outputs/
+runs/
+*.pt
+*.pth
+*.onnx
+*.mp4
+*.avi
+*.mov
