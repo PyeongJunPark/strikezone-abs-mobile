@@ -179,3 +179,7 @@ docs/                     # 통신·좌표 설계
 ## 실행 안내
 
 [개발 환경 안내](docs/development.md)에 Python CPU/GPU 설치, 영상·모델 검사, Android 빌드·실기기 실행 절차를 정리했습니다. [검증 기록](docs/environment-validation.md)에서 실제 확인 범위를 확인하세요.
+
+## 데이터 및 모델 관리
+
+[관리 규칙](docs/data-management.md)에 로컬 배치·라벨·분할·버전 기준을 정리했습니다. 팀 외부 공유 위치는 미정이며 실제 영상·라벨·가중치는 Git에서 제외합니다.

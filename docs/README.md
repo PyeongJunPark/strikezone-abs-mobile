@@ -6,3 +6,5 @@
 
 - [개발 환경](development.md): Python·Android 설치 및 실행
 - [환경 검증 기록](environment-validation.md): 실제 확인 결과
+
+- [데이터·모델 관리 규칙](data-management.md): 저장 위치·라벨·분할·버전

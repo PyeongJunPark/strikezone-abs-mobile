@@ -25,3 +25,16 @@ runs/
 *.mp4
 *.avi
 *.mov
+
+# Private datasets, labels, manifests and training records
+/data/*
+!/data/README.md
+!/data/examples/
+/models/*
+!/models/README.md
+!/models/examples/
+*.mkv
+*.webm
+*.m4v
+*.safetensors
+*.ckpt
