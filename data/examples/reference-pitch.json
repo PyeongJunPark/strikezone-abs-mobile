@@ -1,0 +1,19 @@
+{
+  "description": "Synthetic observations for CLI smoke testing; not real accuracy evidence",
+  "fps": 30,
+  "image_size": [200, 150],
+  "zone": [90, 40, 110, 70],
+  "end_frame": 10,
+  "track": [
+    {"frame_index": 0, "center_xy": [10, 15], "observed": true},
+    {"frame_index": 1, "center_xy": [30, 20], "observed": true},
+    {"frame_index": 2, "center_xy": [50, 30], "observed": true},
+    {"frame_index": 3, "center_xy": [70, 40], "observed": true},
+    {"frame_index": 4, "center_xy": [95, 50], "observed": true}
+  ],
+  "detections": [
+    {"frame_index": 5, "candidates": []},
+    {"frame_index": 6, "candidates": []},
+    {"frame_index": 7, "candidates": []}
+  ]
+}
