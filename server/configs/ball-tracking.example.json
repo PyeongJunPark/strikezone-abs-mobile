@@ -1,0 +1,7 @@
+{
+  "trigger_frame": 490,
+  "pitcher_box": [550, 450, 900, 810],
+  "plate_region": [924, 555, 1074, 740],
+  "crop": [450, 350, 1250, 900],
+  "ball_class": 2
+}
