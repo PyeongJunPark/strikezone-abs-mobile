@@ -2,20 +2,49 @@
 
 이슈 #27의 로컬 실행 기능이다. 영상 업로드 후 홈플레이트 좌우와 투구 시작 시점을 지정하면 타자 자세, 공 추적, 화면상 참고 판정과 표시 영상을 생성한다.
 
+## 처음 준비하기 (Windows PowerShell)
+
+명령은 클론한 저장소 루트에서 실행한다.
+
+1. [uv 설치 안내](https://docs.astral.sh/uv/getting-started/installation/)에 따라 uv를 설치하고 새 PowerShell을 연다. 아래 명령은 Python 3.12 가상환경과 의존성을 준비한다. NVIDIA GPU를 사용하려면 `cpu` 대신 `cu128`을 선택한다. 자세한 환경 조건은 [개발 환경](development.md)을 참고한다.
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts/setup-python.ps1 -Backend cpu
+   ```
+
+2. 아래 두 공개 가중치를 내려받는다. 공 모델은 **BaseballCV ball_tracking_v4-YOLOv11**이며 클래스 `2`가 `baseball`인 모델을 사용해야 한다. 다른 YOLO 모델을 이름만 바꿔 넣으면 동일하게 동작하지 않는다.
+
+   ```powershell
+   New-Item -ItemType Directory -Force models | Out-Null
+   Invoke-WebRequest 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s-pose.pt' -OutFile models/pose.pt
+   Invoke-WebRequest 'https://data.balldatalab.com/index.php/s/YkGBwbFtsf34ky3/download/ball_tracking_v4-YOLOv11.pt' -OutFile models/ball.pt
+   ```
+
+   공 모델 출처: [BaseballCV 다운로드 매니페스트](https://github.com/BaseballCV/BaseballCV/blob/main/models/od/YOLO/ball_tracking/model_weights/ball_trackingv4.txt). 링크가 변경되면 이 파일에서 새 주소를 확인한다. 모델 이용 조건은 각 배포처를 따른다.
+
+3. [FFmpeg 공식 다운로드 페이지](https://ffmpeg.org/download.html)의 Windows builds 링크에서 실행 파일이 포함된 빌드를 내려받아 압축을 푼다. 압축 안의 `bin/ffmpeg.exe` 실제 경로를 아래 `--ffmpeg`에 넣는다. 예시 경로는 `C:/tools/ffmpeg/bin/ffmpeg.exe`다. 소스 코드 압축파일은 실행 파일이 아니다.
+
+   ```powershell
+   & 'C:/tools/ffmpeg/bin/ffmpeg.exe' -version
+   .venv/Scripts/python.exe -c "from ultralytics import YOLO; p=YOLO('models/pose.pt'); b=YOLO('models/ball.pt'); assert p.task == 'pose'; assert b.names[2] == 'baseball', b.names; print('models OK')"
+   ```
+
+모델과 영상은 Git에 포함되지 않는다. 위 명령에서 오류가 나면 다운로드/설치와 경로를 확인한 후 실행한다.
+
 ## 실행
 
 저장소 루트에서 개발 환경 Python 및 로컬 모델을 사용한다. 모델 다운로드·재학습은 서버가 자동 수행하지 않는다.
 
 ```powershell
-python server/scripts/serve_judgment.py --pose-model models/pose.pt --ball-model models/ball.pt --ffmpeg C:/tools/ffmpeg.exe --device 0 --port 8785
+.venv/Scripts/python.exe server/scripts/serve_judgment.py --pose-model models/pose.pt --ball-model models/ball.pt --ffmpeg C:/tools/ffmpeg/bin/ffmpeg.exe --device cpu --port 8785
 ```
 
-CPU는 `--device cpu`. 브라우저에서 `http://127.0.0.1:8785/`를 연다. 종료는 서버 터미널에서 Ctrl+C.
+CPU는 `--device cpu`, CUDA 환경을 준비한 NVIDIA GPU는 `--device 0`. 브라우저에서 `http://127.0.0.1:8785/`를 연다. 종료는 서버 터미널에서 Ctrl+C.
 저장 위치 기본값은 `outputs/local-judgment`, `--output`으로 변경 가능하다. 서버는 127.0.0.1에만 바인딩하며 모델 작업은 한 번에 하나씩 실행한다.
 
 ## 사용 흐름
 
-1. 최대 1GB의 영상을 업로드한다. 고정 카메라, 짧은 투구 클립을 권장한다.
+1. 최대 1GB의 영상을 업로드한다. 고정 카메라, 짧은 투구 클립을 권장한다. 자동 존 높이를 얻으려면 투구 시작 직전 약 2초의 타격 준비 자세도 남겨 자른다. 준비 자세가 없으면 수동·대체 높이를 지정한다.
 2. 타자가 준비한 프레임에서 홈플레이트 좌우 끝 두 점을 클릭한다. 픽셀 좌표로 저장된다.
 3. 프레임 슬라이더로 투구 시작을 선택한다. 이 순간 이전 최대 2초에서 자동 높이를 계산하고 이때 고정한다.
 4. 타자 선택이 모호하면 선택 보조 사각형을 그린다. 높이를 직접 그리는 것이 아니라 해당 사람의 관절로 계산한다.
