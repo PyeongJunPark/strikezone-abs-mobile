@@ -20,7 +20,7 @@ def track_manual_pitch(rows, trigger_frame, pitcher_box, plate_region, fps=30, w
     if any(b[0]>=b[2] or b[1]>=b[3] for b in (pitcher_box,plate_region)):
         raise ValueError('Degenerate calibration')
     rows=[r for r in rows if trigger_frame<=r['frame_index']<trigger_frame+round(4*fps)]
-    cfg=Config(min_speed=2*width/1080*30/fps,min_travel=max(15,20*width/1080))
+    cfg=Config(fps=fps,min_speed=2*width/1080*30/fps,min_travel=max(15,20*width/1080))
     tracks=link(rows,cfg); eligible=[]
     target=np.array([(plate_region[0]+plate_region[2])/2,(plate_region[1]+plate_region[3])/2])
     for tid,t in enumerate(tracks):

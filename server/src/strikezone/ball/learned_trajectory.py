@@ -10,6 +10,7 @@ import numpy as np
 
 @dataclass
 class Config:
+    fps: float = 30.
     confidence: float = .12
     max_gap: int = 8
     max_speed: float = 95.
@@ -34,6 +35,7 @@ def velocity(points):
 
 def link(rows, cfg):
     """Multiple tracks prevent a stationary false positive from owning the ball ID."""
+    from .track_filter import stationary,stationary_radius,stationary_rejections
     tracks=[]
     for row in rows:
         frame=row['frame_index']
@@ -46,6 +48,10 @@ def link(rows, cfg):
             for j,c in enumerate(candidates):
                 distance=math.dist(last['center_xy'],c['center_xy'])
                 error=float(np.linalg.norm(np.array(c['center_xy'])-prediction))
+                # A nearby moving object must not inherit a persistent static ID.
+                history=t[-12:]
+                if stationary(history,cfg.fps) and math.dist(c['center_xy'],history[0]['center_xy'])>stationary_radius(history)*2:
+                    continue
                 gate=cfg.association_margin+min(55.,speed*1.6)*gap
                 if len(t)==1:gate=cfg.max_speed*gap
                 if distance<=cfg.max_speed*gap and error<=gate:
@@ -56,7 +62,12 @@ def link(rows, cfg):
                 if i not in used_tracks and j not in assigned:
                     active[i].append(candidates[j]);assigned.add(j);used_tracks.add(i)
         tracks.extend([[c] for j,c in enumerate(candidates) if j not in assigned])
-    return tracks
+    cleaned=[]
+    for track in tracks:
+        removed,_=stationary_rejections(track,cfg.fps)
+        retained=[p for i,p in enumerate(track) if i not in removed]
+        if retained:cleaned.append(retained)
+    return cleaned
 
 
 def flight_run(track,cfg):
