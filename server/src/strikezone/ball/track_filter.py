@@ -1,7 +1,8 @@
 """Offline stationary-clutter and isolated-spike filter; input stays intact.
 
-Requires two supporting observations on each side. Sustained turns, endpoints,
-long gaps and size-only anomalies are deliberately retained for review.
+Isolated spikes require two supporting observations on each side. Stalled jumps
+require four smooth incoming observations and two stalled observations.
+Sustained moving turns, long gaps and size-only anomalies remain for review.
 Persistent static prefixes and spatially disconnected static tails are excluded;
 continuous flight ending in a stop remains available as arrival evidence.
 """
@@ -48,9 +49,62 @@ def stationary_rejections(points,fps):
     return removed,records
 
 
+def stalled_jump_rejections(points, fps):
+    """Quarantine an implausible jump followed by a stop, not a moving rebound.
+
+    Four smooth incoming observations and two stalled observations are required.
+    A later point may rejoin only within a short prediction window. Otherwise
+    the rest is unverified after tracking loss, not necessarily a false ball.
+    """
+    max_gap = max(2, round(.1 * fps))
+    for i in range(4, len(points)-1):
+        window = points[i-4:i+2]
+        if any(p.get('observed') is False or p.get('source_frame_repeated') for p in window):
+            continue
+        frames = np.array([p['frame_index'] for p in window], float)
+        xy = np.array([p['center_xy'] for p in window], float)
+        gaps = np.diff(frames)
+        if not np.isfinite(xy).all() or min(gaps) <= 0 or max(gaps) > max_gap:
+            continue
+        velocities = np.diff(xy[:4], axis=0) / gaps[:3, None]
+        v = velocities[-1]; speed = np.linalg.norm(v)
+        if speed < 1 or max(np.linalg.norm(velocities-v, axis=1)) > .35*speed:
+            continue
+        expected = xy[3] + v*gaps[3]
+        residual = float(np.linalg.norm(xy[4]-expected))
+        boxes = [p.get('bbox_xyxy') for p in window[:4]]
+        diameters = [min(b[2]-b[0], b[3]-b[1]) for b in boxes if b]
+        diameter = float(np.median(diameters)) if diameters else 4.
+        threshold = max(8., 2*diameter, 1.5*speed*gaps[3])
+        if residual <= threshold or np.linalg.norm(xy[4]-xy[3]) <= 2*speed*gaps[3]:
+            continue
+        if np.linalg.norm(xy[5]-xy[4])/gaps[4] > .25*speed:
+            continue
+        # Require two moving observations to rejoin the original flight.
+        rejoin = len(points)
+        for j in range(i+2, len(points)-1):
+            a,b = points[j:j+2]
+            dt = a['frame_index']-frames[3]
+            gap = b['frame_index']-a['frame_index']
+            if dt > max(3, round(.15*fps)):break
+            if gap <= 0 or gap > max_gap:continue
+            if any(p.get('observed') is False or p.get('source_frame_repeated') for p in (a,b)):continue
+            va = (np.array(b['center_xy'])-a['center_xy'])/gap
+            if math.dist(a['center_xy'], xy[3]+v*dt) <= max(2*diameter, .6*speed) and np.linalg.norm(va-v) <= .5*speed:
+                rejoin=j;break
+        records = [dict(observation=points[j], reason='disconnected_stalled_segment' if j<i+2 else 'unverified_after_discontinuity',
+                        residual_px=residual, threshold_px=threshold, expected_xy=expected.tolist()) for j in range(i,rejoin)]
+        loss = None if rejoin<len(points) else dict(last_valid_frame=points[i-1]['frame_index'], first_rejected_frame=points[i]['frame_index'], confirmed_at=points[i+1]['frame_index'])
+        return set(range(i,rejoin)), records, loss
+    return set(), [], None
+
+
 def filter_track(track, fps=30):
     points = sorted(track, key=lambda p: p['frame_index'])
-    removed,rejected=stationary_rejections(points,fps)
+    removed,rejected,loss=stalled_jump_rejections(points,fps)
+    static_removed,static_rejected=stationary_rejections(points,fps)
+    rejected.extend(r for r in static_rejected if points.index(r['observation']) not in removed)
+    removed.update(static_removed)
     max_gap = max(2, round(fps * .1))
     for i in range(2, len(points)-2):
         window = points[i-2:i+3]
@@ -79,4 +133,4 @@ def filter_track(track, fps=30):
         rejected.append(dict(observation=points[i], reason='isolated_position_spike', residual_px=residual,
                              threshold_px=threshold, expected_xy=predicted.tolist()))
     return dict(track=[p for i,p in enumerate(points) if i not in removed], rejected=rejected,
-                input_count=len(points), removed_count=len(removed), method='stationary_and_isolated_spike_v2')
+                input_count=len(points), removed_count=len(removed), continuity_loss=loss, method='stationary_spike_and_stalled_jump_v3')

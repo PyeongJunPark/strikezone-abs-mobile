@@ -25,6 +25,26 @@ def metadata(path):
     return result
 
 
+def read_video_frames(path, start, stop):
+    """Use decode order as the frame index; random seek can shift phone clips."""
+    if start < 0 or stop <= start:raise ValueError('Invalid frame interval')
+    cap=cv2.VideoCapture(str(path));images={}
+    try:
+        for f in range(stop):
+            if not cap.grab():raise ValueError(f'프레임 {f} 읽기 실패')
+            if f>=start:
+                ok,im=cap.retrieve()
+                if not ok:raise ValueError(f'프레임 {f} 디코딩 실패')
+                images[f]=im
+    finally:cap.release()
+    return images
+
+
+def selected_overlay_frame(position):
+    """Never draw a selected position before its actual/estimated frame time."""
+    return math.ceil(position['frame_index']) if position else None
+
+
 def validate_config(config, meta):
     w,h,n=meta['width'],meta['height'],meta['frames']
     points=config.get('plate_points')
@@ -56,12 +76,7 @@ class VideoPipeline:
         w,h,fps=meta['width'],meta['height'],meta['fps'];trigger=config['trigger_frame']
         start=max(0,trigger-round(2*fps));stop=min(meta['frames'],trigger+round(4*fps))
         if config.get('reference_frame') is not None:start=min(start,config['reference_frame'])
-        cap=cv2.VideoCapture(str(source));cap.set(1,start);images={}
-        for f in range(start,stop):
-            ok,im=cap.read()
-            if not ok:raise ValueError(f'프레임 {f} 읽기 실패')
-            images[f]=im
-        cap.release()
+        images=read_video_frames(source,start,stop)
         points=sorted(config['plate_points'],key=lambda p:p[0]);left,right=points[0][0],points[1][0];pw=right-left;py=sum(p[1] for p in points)/2
         crop=[max(0,int(left-5*pw)),max(0,int(py-12*pw)),min(w,int(right+5*pw)),min(h,int(py+2*pw))]
         selector=BatterSelector();session=PoseZoneSession([left,right],fps,config.get('manual_height'),relaxed=True,fallback_height=config.get('fallback_height'))
@@ -113,20 +128,23 @@ class VideoPipeline:
                 detections=cached_detections or []
             original_track=track
             for i,p in enumerate(track):
-                f=p['frame_index'];x,y=map(round,p['center_xy']);patch=images[f][y-32:y+32,x-32:x+32];size=None
+                f=p['frame_index'];x,y=map(round,p['center_xy']);patch=images[f][y-32:y+32,x-32:x+32];size=None;size_reason='invalid_patch_or_missing_box'
                 if patch.shape==(64,64,3) and p.get('bbox_xyxy'):
                     ns=[images[k][y-32:y+32,x-32:x+32] for k in (f-6,f-3,f+3,f+6) if k in images]
                     if len(ns)>=2:
                         l,t,r,b=p['bbox_xyxy'];m=measure_ball_mask(patch,np.median(ns,axis=0).astype(np.uint8),(r-l,b-t))
+                        size_reason=m['reason']
                         motion=np.array(track[min(i+1,len(track)-1)]['center_xy'])-track[max(0,i-1)]['center_xy']
-                        if m['diameter_px'] is not None:size=perpendicular_width(m['mask'],motion)['width_px']
-                sizes.append(dict(frame=f,perpendicular_px=size,repeated=p.get('source_frame_repeated',False)))
+                        if m['diameter_px'] is not None:
+                            measurement=perpendicular_width(m['mask'],motion);size=measurement['width_px'];size_reason=measurement['reason']
+                    else:size_reason='insufficient_background_frames'
+                sizes.append(dict(frame=f,perpendicular_px=size,repeated=p.get('source_frame_repeated',False),reason=size_reason))
             result=prioritized_reference_call(track,zone,fps,detections=detections or None,end_frame=stop,size_rows=sizes,image_size=(w,h))
             track=filter_track(original_track,fps)['track']
             result['input_track']=original_track
         result.update(zone_session=session.snapshot(),metadata=meta,trigger_frame=trigger,clip_start_frame=start,clip_end_frame=stop,
                       track=track,pose_frames=poses,zone_frames=states,track_source='cached_reviewed_track' if cached_track is not None else 'fresh_model_detection',
-                      manual_pitch_start=True,selection_mode='manual_batter_roi' if config.get('batter_roi') else 'auto_heuristic',size_measurements=sizes)
+                      manual_pitch_start=True,frame_read_mode='sequential_decode',selection_mode='manual_batter_roi' if config.get('batter_roi') else 'auto_heuristic',size_measurements=sizes)
         (output/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
         (output/'detections.json').write_text(json.dumps(detections),encoding='utf8')
         self.render(images,poses,states,track,result,points,output,progress)
@@ -136,7 +154,8 @@ class VideoPipeline:
         fps=result['metadata']['fps'];writer=cv2.VideoWriter(str(output/'render-temp.mp4'),cv2.VideoWriter_fourcc(*'mp4v'),fps,(1280,800))
         by={p['frame_index']:p for p in track};trail=[];last_pose=None;pose_frame=None
         excluded=set((result.get('event') or {}).get('excluded_tail_frames',[]))
-        selected=result['position'];poster_done=False
+        rejected={r['observation']['frame_index']:r['observation'] for r in result.get('track_filter',{}).get('rejected',[])}
+        selected=result['position'];selected_frame=selected_overlay_frame(selected);poster_done=False
         for f,raw in images.items():
             im=raw.copy();state=states[f];zone=state['zone']
             cv2.line(im,tuple(map(round,plate[0])),tuple(map(round,plate[1])),(255,200,0),3)
@@ -149,10 +168,19 @@ class VideoPipeline:
                 bb=last_pose.get('bbox_xyxy')
                 if bb:cv2.rectangle(im,tuple(map(round,bb[:2])),tuple(map(round,bb[2:])),(255,0,255),2)
             if f in by:trail.append((by[f]['center_xy'],f in excluded))
-            for xy,skip in trail:cv2.circle(im,tuple(map(round,xy)),3,(140,140,140) if skip else (0,255,0),-1)
-            if selected and abs(f-selected['frame_index'])<=1:
+            elif f in rejected:trail.append((rejected[f]['center_xy'],True))
+            for xy,skip in trail:cv2.circle(im,tuple(map(round,xy)),2,(140,140,140) if skip else (0,140,0),-1)
+            current=by.get(f)
+            if current and f not in excluded:
+                cx,cy=map(round,current['center_xy'])
+                cv2.circle(im,(cx,cy),9,(0,255,0),2)
+                cv2.putText(im,f'OBSERVED f{f}',(cx+12,cy-12),0,.45,(0,255,0),1)
+            if selected and f==selected_frame:
                 xy=selected['center_xy']
-                if 0<=xy[0]<im.shape[1] and 0<=xy[1]<im.shape[0]:cv2.circle(im,tuple(map(round,xy)),10,(0,165,255),3)
+                kind=selected['source'];color=(255,255,0) if kind=='observed' else ((255,0,255) if kind in ('predicted','short_extrapolation') else (0,165,255))
+                if 0<=xy[0]<im.shape[1] and 0<=xy[1]<im.shape[0]:
+                    cx,cy=map(round,xy);cv2.circle(im,(cx,cy),12,color,2)
+                    cv2.putText(im,kind.upper(),(cx+14,cy+20),0,.5,color,1)
             canvas=np.zeros((800,1280,3),np.uint8);h,w=im.shape[:2]
             if h>w:
                 scale=min(460/w,680/h);sw,sh=round(w*scale),round(h*scale);canvas[:sh,:sw]=cv2.resize(im,(sw,sh))
@@ -162,10 +190,10 @@ class VideoPipeline:
             else:canvas[:680]=cv2.resize(im,(1280,680))
             labels=[f'f{f} / {f/fps:.3f}s | zone {state["phase"]} / {state["height_source"]}',
                     f'OFFLINE REFERENCE: {result["preview"]} | {result["reason"]}',
-                    f'selected: {selected["frame_index"] if selected else "none"} ({selected["source"] if selected else "none"}) | GREEN ball / PURPLE pose / YELLOW zone / GRAY excluded',
-                    f'zone ref {state["reference_frame"]} | lock {state.get("lock_reason")} | Stable stance then motion/pitch lock. Not ABS.']
+                    f'CURRENT: {"OBSERVED" if current and f not in excluded else "NO ACCEPTED OBSERVATION"} | endpoint f{selected["frame_index"] if selected else "none"} / {selected["source"] if selected else "unavailable"}',
+                    'GREEN observation / dark green PAST / CYAN selected observed / MAGENTA predicted / ORANGE interpolated / GRAY excluded']
             for i,label in enumerate(labels):cv2.putText(canvas,label,(10,707+i*25),0,.52,(255,255,255),1)
-            if not poster_done and ((selected and f==round(selected['frame_index'])) or (not selected and f==result['trigger_frame'])):
+            if not poster_done and ((selected and f==selected_frame) or (not selected and f==result['trigger_frame'])):
                 cv2.imencode('.jpg',canvas)[1].tofile(str(output/'poster.jpg'));poster_done=True
             writer.write(canvas)
         writer.release();progress('결과 영상 인코딩')

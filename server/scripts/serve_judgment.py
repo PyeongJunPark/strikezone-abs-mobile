@@ -10,7 +10,7 @@ import uuid
 from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from strikezone.judgment.video_pipeline import VideoPipeline, metadata, validate_config
+from strikezone.judgment.video_pipeline import VideoPipeline, metadata, validate_config, read_video_frames
 
 
 def main():
@@ -79,8 +79,7 @@ def main():
                     if not re.fullmatch('[0-9a-f]{32}',uid):raise ValueError('잘못된 영상 ID')
                     src=root/uid/'upload.mp4';m=metadata(src)
                     if not 0<=frame<m['frames']:raise ValueError('프레임 범위 오류')
-                    cap=cv2.VideoCapture(str(src));cap.set(1,frame);ok,im=cap.read();cap.release()
-                    if not ok:raise ValueError('프레임 읽기 실패')
+                    im=read_video_frames(src,frame,frame+1)[frame]
                     body=cv2.imencode('.jpg',im)[1].tobytes();self.send_response(200);self.send_header('Content-Type','image/jpeg');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
                 except (ValueError,KeyError) as exc:return self.reply({'error':str(exc)},400)
             match=re.fullmatch('/api/jobs/([0-9a-f]{32})',path)
