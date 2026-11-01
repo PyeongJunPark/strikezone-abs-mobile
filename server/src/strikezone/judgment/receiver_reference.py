@@ -141,6 +141,40 @@ def reference_call(track, zone, fps=30, receiver=None, detections=None, end_fram
     return dict(result,preview=preview,reason=reason,position=position,event=event,confidence=confidence,confidence_kind='heuristic_not_probability',edge_margin_px=margin,boundary_hit=abs(margin)<=tolerance,boundary_policy='strike',boundary_tolerance_px=tolerance,warnings=warnings,observations=len(points))
 
 
+def arrival_after_rejected_tail(points, region, fps, detections, end_frame):
+    """Independent raw-frame disappearance check, not proof of a glove catch.
+
+    Filtering a tail alone is insufficient. Require smooth arrival at the
+    receiver, complete subsequent detector coverage and no continuation near
+    the expected flight corridor, including candidates rejected by filtering.
+    """
+    if len(points)<4 or not detections:return None
+    last=points[-4:];frames=np.array([p['frame_index'] for p in last],float)
+    gaps=np.diff(frames);xy=np.array([p['center_xy'] for p in last],float)
+    if min(gaps)<=0 or max(gaps)>max(2,round(.1*fps)):return None
+    vel=np.diff(xy,axis=0)/gaps[:,None];v=vel[-1];speed=np.linalg.norm(v)
+    if speed<1 or max(np.linalg.norm(vel-v,axis=1))>.35*speed:return None
+    if distance_box(xy[-1],region)>0:return None
+    if distance_box(xy[0],region)-distance_box(xy[-1],region)<6:return None
+    f=int(frames[-1]);window=max(3,round(.2*fps))
+    if end_frame is None or f+window>=end_frame:return None
+    by={r['frame_index']:r for r in detections}
+    if any(k not in by or by[k].get('source_frame_repeated') for k in range(f+1,f+window+1)):return None
+    boxes=[p.get('bbox_xyxy') for p in last]
+    ds=[min(b[2]-b[0],b[3]-b[1]) for b in boxes if b]
+    diameter=float(np.median(ds)) if ds else 4.
+    checked=[]
+    for k in range(f+1,f+window+1):
+        dt=k-f;expected=xy[-1]+v*dt
+        gate=max(4.,1.25*diameter,.6*speed*math.sqrt(dt))
+        # Never erase raw candidates simply because a filter rejected them.
+        candidates=[p for p in by[k].get('candidates',[]) if p.get('confidence',1)>=.08 and p.get('center_xy') is not None]
+        if any(math.dist(p['center_xy'],expected)<=gate for p in candidates):return None
+        checked.append(dict(frame=k,expected_xy=expected.tolist(),radius_px=gate,raw_candidates=len(candidates)))
+    return dict(frame=f+1,reason='receiver_disappearance_after_rejected_tail',confirmed_at=f+window,
+                confirmed_contact=False,raw_disappearance_checks=checked)
+
+
 def prioritized_reference_call(track, zone, fps=30, receiver=None, detections=None,
                                end_frame=None, size_rows=None, image_size=None):
     """Observed arrival > size/trajectory forecast > nearest observation.
@@ -152,7 +186,9 @@ def prioritized_reference_call(track, zone, fps=30, receiver=None, detections=No
     from strikezone.ball.track_filter import filter_track
     filtering = filter_track(track, fps)
     track = filtering['track']
-    base = reference_call(track, zone, fps, receiver, detections, end_frame)
+    loss = filtering.get('continuity_loss')
+    # Removing bad observations must not manufacture disappearance evidence.
+    base = reference_call(track, zone, fps, receiver, None if loss else detections, end_frame)
     base['track_filter'] = {k:v for k,v in filtering.items() if k != 'track'}
     base.update(method='observed_then_prediction_reference_v2',decision_source='nearest_observation')
     if base['position'] is None:
@@ -168,7 +204,18 @@ def prioritized_reference_call(track, zone, fps=30, receiver=None, detections=No
     if base.get('event'):
         base['decision_source']='observed_flight_end' if base['reason'] in ('flight_track_discontinuity','direction_change_across_gap','first_receiver_passage_end') else 'observed_arrival'
         return base
-    if valid and distance_box(base['position']['center_xy'],arrival_region)<=max(8.,w*.2):
+    if loss:
+        arrival=arrival_after_rejected_tail(valid,arrival_region,fps,detections,end_frame)
+        if arrival:
+            p=valid[-1];x,y=p['center_xy'];inside=l<=x<=r and t<=y<=b
+            margin=min(x-l,r-x,y-t,b-y) if inside else -distance_box([x,y],zone)
+            tolerance=max(3.,w*.08)
+            return dict(base,position=dict(frame_index=p['frame_index'],center_xy=p['center_xy'],source='observed'),
+                        event=arrival,reason=arrival['reason'],decision_source='observed_arrival',
+                        preview='STRIKE_ESTIMATE' if inside or abs(margin)<=tolerance else 'BALL_ESTIMATE',
+                        edge_margin_px=margin,boundary_hit=abs(margin)<=tolerance,
+                        warnings=[s for s in base['warnings'] if s!='arrival_not_found_fallback']+['catch_or_occlusion_not_distinguished'])
+    if not loss and valid and distance_box(base['position']['center_xy'],arrival_region)<=max(8.,w*.2):
         base['decision_source']='observed_receiver_proximity'
         base['confidence']='low'
         return base
@@ -176,6 +223,10 @@ def prioritized_reference_call(track, zone, fps=30, receiver=None, detections=No
     base['reason']='closest_observation_to_receiver'
     base['event']=None
     base['confidence']='low'
+    if loss:
+        base['observed_fallback']=base['position']
+        base.update(position=None,preview='UNJUDGEABLE',reason='tracking_discontinuity_prediction_unavailable',decision_source='unavailable')
+        base['warnings'].append('disconnected_stalled_candidates_excluded')
     by={p['frame_index']:p for p in valid}
     rows=[]
     for row in size_rows or []:
@@ -202,4 +253,4 @@ def prioritized_reference_call(track, zone, fps=30, receiver=None, detections=No
     return dict(base,preview=preview,reason='offscreen_prediction' if outside else 'trajectory_prediction_after_early_loss',
                 decision_source='predicted_arrival',position=dict(frame_index=c['frame'],center_xy=c['center_xy'],source='predicted'),
                 event=None,confidence='low',edge_margin_px=margin,boundary_hit=abs(margin)<=tolerance,boundary_policy='strike',warnings=warnings,forecast=model,
-                observed_fallback=base['position'],offscreen_prediction=outside)
+                observed_fallback=base.get('observed_fallback',base['position']),offscreen_prediction=outside)
