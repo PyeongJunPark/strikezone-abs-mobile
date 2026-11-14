@@ -13,17 +13,23 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.strikezone.mobile.buffer.CircularVideoBuffer
+import com.strikezone.mobile.buffer.Mp4Packager
 import com.strikezone.mobile.camera.CameraCaptureManager
 import com.strikezone.mobile.encoder.EncodedFrame
 import com.strikezone.mobile.encoder.EncodedFrameListener
 import com.strikezone.mobile.encoder.VideoEncoder
 import com.strikezone.mobile.presentation.StreamingScreen
 import com.strikezone.mobile.presentation.StreamingUiState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 스트존 모바일 진입점 액티비티.
  *
- * 안드로이드 생명주기 및 카메라·인코더 파이프라인의 오케스트레이션을 총괄합니다.
+ * 카메라 캡처, MediaCodec 인코딩, 4.5초 원형 링 버퍼 및 MP4 패키징을 총괄합니다.
  */
 class MainActivity : ComponentActivity() {
 
@@ -37,6 +43,10 @@ class MainActivity : ComponentActivity() {
     private var videoEncoder: VideoEncoder? = null
     private var cameraManager: CameraCaptureManager? = null
     private var currentPreviewSurface: Surface? = null
+
+    // 4.5초 덤프를 위해 6.0초 안전 마진을 유지하는 원형 링 버퍼
+    private val circularBuffer = CircularVideoBuffer(bufferDurationSeconds = 6.0f)
+    private lateinit var mp4Packager: Mp4Packager
 
     private var totalEncodedFrames = 0L
     private var totalKeyFrames = 0L
@@ -60,6 +70,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        mp4Packager = Mp4Packager(applicationContext)
 
         setContent {
             MaterialTheme {
@@ -72,6 +83,9 @@ class MainActivity : ComponentActivity() {
                     onSurfaceDestroyed = {
                         currentPreviewSurface = null
                         releasePipeline()
+                    },
+                    onTestDumpClick = {
+                        triggerManualDumpTest()
                     }
                 )
             }
@@ -98,6 +112,8 @@ class MainActivity : ComponentActivity() {
         }
 
         try {
+            circularBuffer.clear()
+
             // 1. MediaCodec 1080p 30fps H.264 인코더 시작
             videoEncoder = VideoEncoder(
                 width = TARGET_WIDTH,
@@ -108,10 +124,12 @@ class MainActivity : ComponentActivity() {
             ).apply {
                 setListener(object : EncodedFrameListener {
                     override fun onOutputFormatChanged(format: MediaFormat) {
-                        Log.i(TAG, "인코더 포맷 확정: $format")
+                        circularBuffer.setFormat(format)
+                        Log.i(TAG, "인코더 포맷 확정 -> 링 버퍼 전달: $format")
                     }
 
                     override fun onFrameEncoded(frame: EncodedFrame) {
+                        circularBuffer.addFrame(frame)
                         onEncodedFrameReceived(frame)
                     }
                 })
@@ -155,7 +173,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 인코딩된 프레임 수신 처리 (통계 및 UI 갱신).
+     * 인코딩된 프레임 수신 처리 (통계 및 링버퍼 UI 갱신).
      */
     private fun onEncodedFrameReceived(frame: EncodedFrame) {
         totalEncodedFrames++
@@ -168,7 +186,8 @@ class MainActivity : ComponentActivity() {
         // 1초마다 통계 및 UI 갱신
         if (elapsed >= 1000) {
             val currentFps = (framesSinceLastFps * 1000f / elapsed)
-            val totalSeconds = totalEncodedFrames / TARGET_FPS.toFloat()
+            val bufferDuration = circularBuffer.currentDurationSeconds
+            val bufferCount = circularBuffer.frameCount
 
             runOnUiThread {
                 uiState.value = uiState.value.copy(
@@ -177,13 +196,60 @@ class MainActivity : ComponentActivity() {
                         currentFps, totalEncodedFrames, totalKeyFrames
                     ),
                     bufferStatus = String.format(
-                        "상시 인코딩 경과: %.1f초 (3단계 링버퍼 대기)",
-                        totalSeconds
+                        "링버퍼: %.1f초 보관 중 (%d 프레임)",
+                        bufferDuration, bufferCount
                     )
                 )
             }
             lastFpsTimestamp = now
             framesSinceLastFps = 0
+        }
+    }
+
+    /**
+     * 수동 4.5초 DUMP 테스트 트리거 (백그라운드 코루틴에서 실행).
+     */
+    private fun triggerManualDumpTest() {
+        val format = circularBuffer.outputFormat
+        if (format == null) {
+            Toast.makeText(this, "인코더가 아직 준비되지 않았습니다.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                val startMs = System.currentTimeMillis()
+                val slice = circularBuffer.dumpSlice(4.5f)
+                if (slice.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "덤프할 버퍼 프레임이 부족합니다.", Toast.LENGTH_SHORT).show()
+                    }
+                    return@launch
+                }
+
+                val mp4File = mp4Packager.packageToFile(slice, format)
+                val elapsedMs = System.currentTimeMillis() - startMs
+
+                val fileSizeMb = mp4File.length() / (1024f * 1024f)
+                val sliceDuration = (slice.last().presentationTimeUs - slice.first().presentationTimeUs) / 1_000_000f
+                val isFirstKeyFrame = slice.first().isKeyFrame
+
+                val dumpResultMsg = String.format(
+                    "최근 덤프: %.1f초 클립 (%.2fMB, %d프레임, IDR시작=%b, 패키징 %dms 소요)",
+                    sliceDuration, fileSizeMb, slice.size, isFirstKeyFrame, elapsedMs
+                )
+
+                Log.i(TAG, dumpResultMsg)
+                withContext(Dispatchers.Main) {
+                    uiState.value = uiState.value.copy(lastDumpInfo = dumpResultMsg)
+                    Toast.makeText(this@MainActivity, "4.5초 MP4 덤프 성공! (${mp4File.length()} 바이트)", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "수동 덤프 테스트 실패", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "덤프 실패: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -194,10 +260,13 @@ class MainActivity : ComponentActivity() {
         videoEncoder?.stop()
         videoEncoder = null
 
+        circularBuffer.clear()
+
         runOnUiThread {
             uiState.value = uiState.value.copy(
                 cameraStatus = "카메라: 정지됨",
-                encoderStatus = "인코더: 정지됨"
+                encoderStatus = "인코더: 정지됨",
+                bufferStatus = "버퍼: 0.0초 (0 프레임)"
             )
         }
     }

@@ -6,9 +6,7 @@ import android.view.SurfaceView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,17 +18,19 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
- * 풀스크린 카메라 프리뷰와 상단 반투명 모니터링 오버레이 패널을 표시하는 Composable 화면.
+ * 풀스크린 카메라 프리뷰와 상단 모니터링 오버레이 패널 및 수동 덤프 테스트 버튼을 표시하는 Composable 화면.
  *
  * @param uiState 화면에 표시할 스트리밍 상태 정보
  * @param onSurfaceCreated 카메라 프리뷰 Surface 생성 완료 시 콜백
  * @param onSurfaceDestroyed Surface 해제 시 콜백
+ * @param onTestDumpClick 수동 4.5초 DUMP 테스트 버튼 클릭 콜백
  */
 @Composable
 fun StreamingScreen(
     uiState: StreamingUiState,
     onSurfaceCreated: (Surface) -> Unit,
     onSurfaceDestroyed: () -> Unit,
+    onTestDumpClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -71,6 +71,26 @@ fun StreamingScreen(
                 .padding(16.dp)
                 .align(Alignment.TopCenter)
         )
+
+        // 하단 수동 DUMP 테스트 버튼
+        Button(
+            onClick = onTestDumpClick,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 32.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF1E88E5)
+            ),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Text(
+                text = "4.5초 DUMP 수동 테스트",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
     }
 }
 
@@ -118,6 +138,16 @@ fun StatusOverlayCard(
                 color = Color(0xFFFFFF99),
                 fontSize = 13.sp
             )
+
+            uiState.lastDumpInfo?.let { dumpInfo ->
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = dumpInfo,
+                    color = Color(0xFF88FF88),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 }
@@ -129,7 +159,8 @@ private fun StatusOverlayCardPreview() {
         uiState = StreamingUiState(
             cameraStatus = "카메라: 1080p 30fps 스트리밍 중",
             encoderStatus = "인코더: 30.0 FPS | 누적 150 프레임 (IDR: 5)",
-            bufferStatus = "상시 인코딩 경과: 5.0초 (3단계 링버퍼 대기)"
+            bufferStatus = "버퍼: 6.0초 (180 프레임 보관 중)",
+            lastDumpInfo = "최근 덤프: 4.6초 클립 (5.2MB, 42ms 소요) 생성 완료"
         ),
         modifier = Modifier.padding(16.dp)
     )
