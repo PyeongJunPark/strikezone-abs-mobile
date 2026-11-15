@@ -1,4 +1,4 @@
-"""Interactive test server to trigger DUMP and receive 4.5s MP4 clips from the mobile app."""
+"""모바일 앱에 DUMP를 요청하고 4.5초 MP4 클립을 받는 대화형 테스트 서버."""
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +13,7 @@ from strikezone.transport.dump_receiver import DumpReceiver, verify_mp4_integrit
 
 
 def run_mock_client(host: str, port: int, payload_size: int = 1024 * 1024):
-    """Simulate a smartphone client connecting, waiting for DUMP, and streaming a dummy MP4."""
+    """스마트폰의 서버 연결, DUMP 대기, 더미 MP4 송신을 모의 실행한다."""
     import socket
     time.sleep(0.3)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -22,12 +22,12 @@ def run_mock_client(host: str, port: int, payload_size: int = 1024 * 1024):
         reader = s.makefile("r", encoding="ascii")
         cmd = reader.readline()
         if cmd.startswith("DUMP"):
-            # Dummy MP4 header (ftyp box) + padding
+            # MP4 형식의 ftyp 헤더와 패딩으로 더미 페이로드 구성
             header = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42"
             padding = b"\x00" * (payload_size - len(header))
             data = header + padding
 
-            # Send 4-byte length + payload
+            # 4바이트 길이 헤더와 페이로드 전송
             s.sendall(struct.pack("!I", len(data)))
             s.sendall(data)
     finally:
