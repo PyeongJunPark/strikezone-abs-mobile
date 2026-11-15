@@ -23,10 +23,11 @@ class Mp4Packager(private val context: Context) {
      *
      * @param frames 패키징할 H.264 프레임 리스트 (첫 프레임은 Key Frame이어야 함)
      * @param format 인코더의 MediaFormat (SPS/PPS 포함)
+     * @param rotationDegrees 센서 출력 영상을 바로 세우기 위한 시계 방향 회전 각도
      * @return 생성된 MP4 바이너리 ByteArray
      */
-    fun packageToMp4(frames: List<EncodedFrame>, format: MediaFormat): ByteArray {
-        val outputFile = packageToFile(frames, format)
+    fun packageToMp4(frames: List<EncodedFrame>, format: MediaFormat, rotationDegrees: Int): ByteArray {
+        val outputFile = packageToFile(frames, format, rotationDegrees)
         try {
             return outputFile.readBytes()
         } finally {
@@ -41,9 +42,10 @@ class Mp4Packager(private val context: Context) {
      *
      * @param frames 패키징할 H.264 프레임 리스트
      * @param format 인코더의 MediaFormat
+     * @param rotationDegrees 센서 출력 영상을 바로 세우기 위한 시계 방향 회전 각도
      * @return 생성된 MP4 File 객체
      */
-    fun packageToFile(frames: List<EncodedFrame>, format: MediaFormat): File {
+    fun packageToFile(frames: List<EncodedFrame>, format: MediaFormat, rotationDegrees: Int): File {
         if (frames.isEmpty()) {
             throw IllegalArgumentException("패키징할 프레임이 없습니다.")
         }
@@ -55,6 +57,8 @@ class Mp4Packager(private val context: Context) {
         var muxer: MediaMuxer? = null
         try {
             muxer = MediaMuxer(tempFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            // 디코더가 프리뷰와 동일한 방향으로 영상을 바로 세우도록 회전 메타데이터를 기록한다.
+            muxer.setOrientationHint(rotationDegrees)
             val trackIndex = muxer.addTrack(format)
             muxer.start()
 

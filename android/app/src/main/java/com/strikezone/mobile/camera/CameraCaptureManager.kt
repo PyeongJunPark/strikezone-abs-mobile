@@ -7,8 +7,9 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.util.Range
-import android.util.Size
 import android.view.Surface
+import android.view.SurfaceHolder
+import android.view.WindowManager
 
 /**
  * Camera2 API 기반의 고성능 무복사(Zero-Copy) 카메라 캡처 매니저.
@@ -34,6 +35,10 @@ class CameraCaptureManager(
     private var cameraHandler: Handler? = null
 
     private var isSessionActive = false
+    @Volatile private var isCameraRequested = false
+
+    var recordingRotationDegrees: Int = 0
+        private set
 
     /**
      * 카메라 백그라운드 스레드 시작.
@@ -117,15 +122,42 @@ class CameraCaptureManager(
     ) {
         if (isSessionActive) return
 
-        startBackgroundThread()
         val cameraId = getBackCameraId()
         val characteristics = cameraManager.getCameraCharacteristics(cameraId)
         val selectedFpsRange = findOptimalFpsRange(characteristics)
-        Log.i(TAG, "선택된 카메라 ID: $cameraId, FPS 범위: $selectedFpsRange")
+
+        // SurfaceView 버퍼는 회전 전의 카메라 출력 크기를 사용해야 한다.
+        val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val supportedSizes = streamMap?.getOutputSizes(SurfaceHolder::class.java) ?: emptyArray()
+        val isResolutionSupported = supportedSizes.any {
+            it.width == targetWidth && it.height == targetHeight
+        }
+        if (!isResolutionSupported) {
+            throw IllegalStateException("카메라가 ${targetWidth}x${targetHeight} 출력을 지원하지 않습니다.")
+        }
+
+        @Suppress("DEPRECATION")
+        val displayRotation = (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
+        val displayRotationDegrees = when (displayRotation) {
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+        val sensorRotationDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val sign = if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) 1 else -1
+        recordingRotationDegrees = (sensorRotationDegrees - displayRotationDegrees * sign + 360) % 360
+        Log.i(TAG, "선택된 카메라 ID: $cameraId, FPS 범위: $selectedFpsRange, 목표 해상도: ${targetWidth}x${targetHeight}, 영상 회전: $recordingRotationDegrees")
 
         try {
+            isCameraRequested = true
+            startBackgroundThread()
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
+                    if (!isCameraRequested) {
+                        camera.close()
+                        return
+                    }
                     cameraDevice = camera
                     createCaptureSession(camera, previewSurface, encoderSurface, selectedFpsRange, onStarted, onError)
                 }
@@ -133,6 +165,7 @@ class CameraCaptureManager(
                 override fun onDisconnected(camera: CameraDevice) {
                     Log.w(TAG, "카메라 연결 끊김")
                     stopCamera()
+                    onError("카메라 연결이 끊겼습니다.")
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
@@ -144,6 +177,7 @@ class CameraCaptureManager(
             }, cameraHandler)
         } catch (e: Exception) {
             Log.e(TAG, "카메라 시작 예외", e)
+            stopCamera()
             onError(e.message ?: "카메라 초기화 실패")
         }
     }
@@ -165,7 +199,10 @@ class CameraCaptureManager(
 
             camera.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
-                    if (cameraDevice == null) return
+                    if (!isCameraRequested || cameraDevice == null) {
+                        session.close()
+                        return
+                    }
                     captureSession = session
 
                     try {
@@ -205,6 +242,7 @@ class CameraCaptureManager(
      * 카메라 및 세션 자원 완전 해제.
      */
     fun stopCamera() {
+        isCameraRequested = false
         isSessionActive = false
         try {
             captureSession?.close()

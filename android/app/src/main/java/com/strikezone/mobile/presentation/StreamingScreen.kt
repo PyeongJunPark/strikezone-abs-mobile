@@ -24,6 +24,7 @@ import androidx.compose.ui.viewinterop.AndroidView
  * @param onSurfaceCreated 카메라 프리뷰 Surface 생성 완료 시 콜백
  * @param onSurfaceDestroyed Surface 해제 시 콜백
  * @param onTestDumpClick 수동 4.5초 DUMP 테스트 버튼 클릭 콜백
+ * @param onRetryClick 카메라 오류 후 다시 시작할 때 호출하는 콜백
  */
 @Composable
 fun StreamingScreen(
@@ -31,6 +32,7 @@ fun StreamingScreen(
     onSurfaceCreated: (Surface) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onTestDumpClick: () -> Unit,
+    onRetryClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -43,6 +45,8 @@ fun StreamingScreen(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
                 SurfaceView(context).apply {
+                    // Surface 버퍼는 센서 출력 크기를 사용하고, 세로 화면 회전은 SurfaceView가 처리한다.
+                    holder.setFixedSize(1920, 1080)
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) {
                             onSurfaceCreated(holder.surface)
@@ -71,6 +75,15 @@ fun StreamingScreen(
                 .padding(16.dp)
                 .align(Alignment.TopCenter)
         )
+
+        if (uiState.canRetry) {
+            Button(
+                onClick = onRetryClick,
+                modifier = Modifier.align(Alignment.Center)
+            ) {
+                Text("카메라 다시 시작")
+            }
+        }
 
         // 하단 수동 DUMP 테스트 버튼
         Button(

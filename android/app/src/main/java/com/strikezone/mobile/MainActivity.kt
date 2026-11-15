@@ -86,6 +86,9 @@ class MainActivity : ComponentActivity() {
                     },
                     onTestDumpClick = {
                         triggerManualDumpTest()
+                    },
+                    onRetryClick = {
+                        currentPreviewSurface?.let { checkPermissionAndStart(it) }
                     }
                 )
             }
@@ -113,6 +116,7 @@ class MainActivity : ComponentActivity() {
 
         try {
             circularBuffer.clear()
+            uiState.value = uiState.value.copy(canRetry = false)
 
             // 1. MediaCodec 1080p 30fps H.264 인코더 시작
             videoEncoder = VideoEncoder(
@@ -142,33 +146,44 @@ class MainActivity : ComponentActivity() {
             }
 
             // 2. Camera2 듀얼 Surface 캡처 시작 (프리뷰 + 인코더)
-            cameraManager = CameraCaptureManager(
+            val captureManager = CameraCaptureManager(
                 context = this,
                 targetWidth = TARGET_WIDTH,
                 targetHeight = TARGET_HEIGHT,
                 targetFps = TARGET_FPS
-            ).apply {
-                startCamera(
+            )
+            cameraManager = captureManager
+            captureManager.startCamera(
                     previewSurface = previewSurface,
                     encoderSurface = encoderSurface,
                     onStarted = {
                         runOnUiThread {
+                            if (cameraManager !== captureManager) return@runOnUiThread
                             uiState.value = uiState.value.copy(
                                 cameraStatus = "카메라: 1080p 30fps 스트리밍 중",
-                                encoderStatus = "인코더: H.264 압축 활성화 (I-Frame 1s)"
+                                encoderStatus = "인코더: H.264 압축 활성화 (I-Frame 1s)",
+                                canRetry = false
                             )
                         }
                     },
                     onError = { errorMsg ->
                         runOnUiThread {
-                            uiState.value = uiState.value.copy(cameraStatus = "카메라 오류: $errorMsg")
+                            if (cameraManager !== captureManager) return@runOnUiThread
+                            releasePipeline()
+                            uiState.value = uiState.value.copy(
+                                cameraStatus = "카메라 오류: $errorMsg",
+                                canRetry = true
+                            )
                         }
                     }
                 )
-            }
         } catch (e: Exception) {
             Log.e(TAG, "파이프라인 설정 실패", e)
-            uiState.value = uiState.value.copy(cameraStatus = "초기화 오류: ${e.message}")
+            releasePipeline()
+            uiState.value = uiState.value.copy(
+                cameraStatus = "초기화 오류: ${e.message}",
+                canRetry = true
+            )
         }
     }
 
@@ -211,6 +226,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun triggerManualDumpTest() {
         val format = circularBuffer.outputFormat
+        val rotationDegrees = cameraManager?.recordingRotationDegrees ?: 0
         if (format == null) {
             Toast.makeText(this, "인코더가 아직 준비되지 않았습니다.", Toast.LENGTH_SHORT).show()
             return
@@ -227,22 +243,29 @@ class MainActivity : ComponentActivity() {
                     return@launch
                 }
 
-                val mp4File = mp4Packager.packageToFile(slice, format)
-                val elapsedMs = System.currentTimeMillis() - startMs
+                val mp4File = mp4Packager.packageToFile(slice, format, rotationDegrees)
+                try {
+                    val elapsedMs = System.currentTimeMillis() - startMs
 
-                val fileSizeMb = mp4File.length() / (1024f * 1024f)
-                val sliceDuration = (slice.last().presentationTimeUs - slice.first().presentationTimeUs) / 1_000_000f
-                val isFirstKeyFrame = slice.first().isKeyFrame
+                    val fileSizeMb = mp4File.length() / (1024f * 1024f)
+                    val sliceDuration = (slice.last().presentationTimeUs - slice.first().presentationTimeUs) / 1_000_000f
+                    val isFirstKeyFrame = slice.first().isKeyFrame
 
-                val dumpResultMsg = String.format(
-                    "최근 덤프: %.1f초 클립 (%.2fMB, %d프레임, IDR시작=%b, 패키징 %dms 소요)",
-                    sliceDuration, fileSizeMb, slice.size, isFirstKeyFrame, elapsedMs
-                )
+                    val dumpResultMsg = String.format(
+                        "최근 덤프: %.1f초 클립 (%.2fMB, %d프레임, IDR시작=%b, 패키징 %dms 소요)",
+                        sliceDuration, fileSizeMb, slice.size, isFirstKeyFrame, elapsedMs
+                    )
 
-                Log.i(TAG, dumpResultMsg)
-                withContext(Dispatchers.Main) {
-                    uiState.value = uiState.value.copy(lastDumpInfo = dumpResultMsg)
-                    Toast.makeText(this@MainActivity, "4.5초 MP4 덤프 성공! (${mp4File.length()} 바이트)", Toast.LENGTH_SHORT).show()
+                    Log.i(TAG, dumpResultMsg)
+                    withContext(Dispatchers.Main) {
+                        uiState.value = uiState.value.copy(lastDumpInfo = dumpResultMsg)
+                        Toast.makeText(this@MainActivity, "4.5초 MP4 덤프 성공! (${mp4File.length()} 바이트)", Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    // 수동 테스트 확인 후 캐시 저장소 누수 방지를 위해 임시 파일 삭제
+                    if (mp4File.exists()) {
+                        mp4File.delete()
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "수동 덤프 테스트 실패", e)
@@ -262,11 +285,18 @@ class MainActivity : ComponentActivity() {
 
         circularBuffer.clear()
 
+        // 세션 재시작 시 통계 왜곡 방지를 위한 카운터 리셋
+        totalEncodedFrames = 0L
+        totalKeyFrames = 0L
+        framesSinceLastFps = 0
+        lastFpsTimestamp = System.currentTimeMillis()
+
         runOnUiThread {
             uiState.value = uiState.value.copy(
                 cameraStatus = "카메라: 정지됨",
                 encoderStatus = "인코더: 정지됨",
-                bufferStatus = "버퍼: 0.0초 (0 프레임)"
+                bufferStatus = "버퍼: 0.0초 (0 프레임)",
+                canRetry = false
             )
         }
     }

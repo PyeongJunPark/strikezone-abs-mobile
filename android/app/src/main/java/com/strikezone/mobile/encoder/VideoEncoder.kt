@@ -138,7 +138,6 @@ class VideoEncoder(
                     val isCodecConfig = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
                     if (isCodecConfig) {
                         // SPS/PPS 코덱 설정 데이터는 onOutputFormatChanged를 통해 MediaFormat으로 수신되므로 프레임 큐 적재 제외
-                        codec.releaseOutputBuffer(index, false)
                         return
                     }
 
@@ -159,9 +158,15 @@ class VideoEncoder(
 
                     listener?.onFrameEncoded(encodedFrame)
                 }
-                codec.releaseOutputBuffer(index, false)
             } catch (e: Exception) {
                 Log.e(TAG, "출력 버퍼 처리 중 오류", e)
+            } finally {
+                try {
+                    codec.releaseOutputBuffer(index, false)
+                } catch (e: IllegalStateException) {
+                    // 인코더 종료와 콜백이 겹친 경우에도 콜백 스레드가 중단되지 않게 한다.
+                    Log.w(TAG, "종료된 인코더의 출력 버퍼 반환 실패", e)
+                }
             }
         }
 
