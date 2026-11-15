@@ -141,18 +141,18 @@ class TcpDumpClient(private val listener: TcpEventListener) {
         }
     }
 
-    /** 4바이트 Big-Endian 길이와 MP4 파일을 현재 연결로 전송한다. */
-    fun sendMp4File(file: File) {
+    /** 4바이트 Big-Endian 길이와 MP4 파일을 전송하고, 출력 스트림 완료 여부를 반환한다. */
+    fun sendMp4File(file: File): Boolean {
         synchronized(sendLock) {
             val current = synchronized(connectionLock) { connection }
             if (current == null) {
                 listener.onError("서버에 연결되어 있지 않아 전송할 수 없습니다.")
-                return
+                return false
             }
             val fileSize = file.length()
             if (fileSize <= 0 || fileSize > Int.MAX_VALUE) {
                 listener.onError("전송할 파일 크기가 올바르지 않습니다.")
-                return
+                return false
             }
 
             val startMs = System.currentTimeMillis()
@@ -173,10 +173,12 @@ class TcpDumpClient(private val listener: TcpEventListener) {
                 val elapsedMs = System.currentTimeMillis() - startMs
                 Log.i(TAG, "MP4 바이너리 스트리밍 완료: $bytesSent 바이트 ($elapsedMs ms 소요)")
                 listener.onPayloadSent(bytesSent, elapsedMs)
+                return true
             } catch (e: Exception) {
                 Log.e(TAG, "MP4 전송 실패", e)
                 listener.onError("전송 오류: ${e.message}")
                 disconnectCurrent(current)
+                return false
             }
         }
     }

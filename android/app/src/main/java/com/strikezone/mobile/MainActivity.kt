@@ -297,7 +297,12 @@ class MainActivity : ComponentActivity(), TcpEventListener {
                     val packageTimeMs = System.currentTimeMillis() - startMs
 
                     // 3. TCP 소켓을 통해 바이너리 스트리밍 송신 (4바이트 크기 + 페이로드)
-                    tcpClient.sendMp4File(mp4File)
+                    if (!tcpClient.sendMp4File(mp4File)) {
+                        withContext(Dispatchers.Main) {
+                            uiState.value = uiState.value.copy(lastDumpInfo = "DUMP 송신 실패: 연결 상태를 확인하세요.")
+                        }
+                        return@launch
+                    }
 
                     val totalElapsedMs = System.currentTimeMillis() - startMs
                     val sliceDuration = (slice.last().presentationTimeUs - slice.first().presentationTimeUs) / 1_000_000f

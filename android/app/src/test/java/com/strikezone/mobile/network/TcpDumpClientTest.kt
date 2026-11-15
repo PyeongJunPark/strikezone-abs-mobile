@@ -10,6 +10,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.DataInputStream
+import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
@@ -114,6 +116,30 @@ class TcpDumpClientTest {
         } finally {
             first.close()
             second.close()
+        }
+    }
+
+    @Test
+    fun sendResultMatchesPayloadTransfer() {
+        val payload = ByteArray(128) { it.toByte() }
+        val file = File.createTempFile("tcp-dump-test-", ".mp4")
+        try {
+            file.writeBytes(payload)
+            assertFalse("미연결 상태에서는 성공을 반환하면 안 됩니다.", client.sendMp4File(file))
+
+            client.connect("127.0.0.1", server.localPort, scope)
+            server.accept().use { accepted ->
+                assertTrue(connected.await(2, TimeUnit.SECONDS))
+                assertTrue("전송 완료 시에만 성공을 반환해야 합니다.", client.sendMp4File(file))
+                val input = DataInputStream(accepted.getInputStream())
+                val length = input.readInt()
+                assertEquals(payload.size, length)
+                val received = ByteArray(length)
+                input.readFully(received)
+                org.junit.Assert.assertArrayEquals(payload, received)
+            }
+        } finally {
+            file.delete()
         }
     }
 }
