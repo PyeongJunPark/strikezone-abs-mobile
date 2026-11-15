@@ -135,11 +135,17 @@ class VideoEncoder(
             try {
                 val outputBuffer: ByteBuffer? = codec.getOutputBuffer(index)
                 if (outputBuffer != null && info.size > 0) {
+                    val isCodecConfig = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                    if (isCodecConfig) {
+                        // SPS/PPS 코덱 설정 데이터는 onOutputFormatChanged를 통해 MediaFormat으로 수신되므로 프레임 큐 적재 제외
+                        codec.releaseOutputBuffer(index, false)
+                        return
+                    }
+
                     outputBuffer.position(info.offset)
                     outputBuffer.limit(info.offset + info.size)
 
                     val isKeyFrame = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                    val isCodecConfig = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
 
                     val data = ByteArray(info.size)
                     outputBuffer.get(data)
@@ -148,7 +154,7 @@ class VideoEncoder(
                         data = data,
                         presentationTimeUs = info.presentationTimeUs,
                         flags = info.flags,
-                        isKeyFrame = isKeyFrame || isCodecConfig
+                        isKeyFrame = isKeyFrame
                     )
 
                     listener?.onFrameEncoded(encodedFrame)

@@ -16,7 +16,6 @@ class Mp4Packager(private val context: Context) {
 
     companion object {
         private const val TAG = "Mp4Packager"
-        private const val TEMP_MP4_NAME = "dump_clip.mp4"
     }
 
     /**
@@ -28,7 +27,13 @@ class Mp4Packager(private val context: Context) {
      */
     fun packageToMp4(frames: List<EncodedFrame>, format: MediaFormat): ByteArray {
         val outputFile = packageToFile(frames, format)
-        return outputFile.readBytes()
+        try {
+            return outputFile.readBytes()
+        } finally {
+            if (outputFile.exists()) {
+                outputFile.delete()
+            }
+        }
     }
 
     /**
@@ -44,10 +49,8 @@ class Mp4Packager(private val context: Context) {
         }
 
         val startTime = System.currentTimeMillis()
-        val tempFile = File(context.cacheDir, TEMP_MP4_NAME)
-        if (tempFile.exists()) {
-            tempFile.delete()
-        }
+        // I/O 경합 및 덮어쓰기 방지를 위해 유니크한 임시 파일 생성
+        val tempFile = File.createTempFile("dump_", ".mp4", context.cacheDir)
 
         var muxer: MediaMuxer? = null
         try {
@@ -59,12 +62,10 @@ class Mp4Packager(private val context: Context) {
             var lastPtsUs = -1L
 
             val bufferInfo = MediaCodec.BufferInfo()
-            val byteBuffer = ByteBuffer.allocateDirect(1024 * 1024) // 1MB 재사용 버퍼
 
             for (frame in frames) {
-                byteBuffer.clear()
-                byteBuffer.put(frame.data)
-                byteBuffer.flip()
+                // 고정 크기 할당 대신 frame.data를 직접 wrap하여 1MB 버퍼 오버플로우 방지 및 무복사 처리
+                val byteBuffer = ByteBuffer.wrap(frame.data)
 
                 // 타임스탬프를 0초 기준으로 리베이싱 (백엔드 디코더 0번 프레임 정렬)
                 var ptsUs = frame.presentationTimeUs - baseTimeUs
@@ -90,6 +91,9 @@ class Mp4Packager(private val context: Context) {
             return tempFile
         } catch (e: Exception) {
             Log.e(TAG, "MP4 패키징 중 오류 발생", e)
+            if (tempFile.exists()) {
+                tempFile.delete()
+            }
             throw e
         } finally {
             try {

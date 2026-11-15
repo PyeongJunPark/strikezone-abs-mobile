@@ -43,6 +43,12 @@ class CircularVideoBuffer(
      */
     fun addFrame(frame: EncodedFrame) {
         synchronized(lock) {
+            // 카메라 재시작 등으로 인한 PTS 역전 감지 시 오래된 프레임 클리어
+            if (frameQueue.isNotEmpty() && frame.presentationTimeUs < frameQueue.last.presentationTimeUs) {
+                Log.w(TAG, "PTS 역전 감지 (이전: ${frameQueue.last.presentationTimeUs}us, 신규: ${frame.presentationTimeUs}us). 버퍼를 리셋합니다.")
+                frameQueue.clear()
+            }
+
             frameQueue.addLast(frame)
 
             // 버퍼 보존 기간(6.0초)을 초과한 오래된 프레임 폐기

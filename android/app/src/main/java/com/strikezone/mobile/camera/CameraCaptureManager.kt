@@ -49,7 +49,10 @@ class CameraCaptureManager(
     private fun stopBackgroundThread() {
         cameraThread?.quitSafely()
         try {
-            cameraThread?.join()
+            // HandlerThread 콜백 내부에서 stopCamera() 호출 시 데드락(Deadlock) 방지
+            if (Thread.currentThread() != cameraThread) {
+                cameraThread?.join()
+            }
             cameraThread = null
             cameraHandler = null
         } catch (e: InterruptedException) {
@@ -61,14 +64,18 @@ class CameraCaptureManager(
      * 후면 카메라 ID 검색.
      */
     private fun getBackCameraId(): String {
-        for (id in cameraManager.cameraIdList) {
+        val cameraIds = cameraManager.cameraIdList
+        if (cameraIds.isEmpty()) {
+            throw IllegalStateException("사용 가능한 카메라 장치를 찾을 수 없습니다.")
+        }
+        for (id in cameraIds) {
             val characteristics = cameraManager.getCameraCharacteristics(id)
             val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
             if (facing == CameraCharacteristics.LENS_FACING_BACK) {
                 return id
             }
         }
-        return cameraManager.cameraIdList[0]
+        return cameraIds[0]
     }
 
     /**

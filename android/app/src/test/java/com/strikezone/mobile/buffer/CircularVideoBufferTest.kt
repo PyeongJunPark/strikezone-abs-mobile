@@ -77,4 +77,22 @@ class CircularVideoBufferTest {
         assertTrue("첫 프레임은 Key Frame이어야 함", slice.first().isKeyFrame)
         assertEquals("버퍼의 첫 I-Frame(0번)부터 반환되어야 함", 0L, slice.first().presentationTimeUs)
     }
+
+    @Test
+    fun testPtsInversionResetsBuffer() {
+        // 1. 기존에 3초 분량 프레임 적재 (PTS: 0 ~ 3초)
+        val frameDurationUs = 33_333L
+        for (i in 0 until 90) {
+            val isKey = (i % 30 == 0)
+            buffer.addFrame(createDummyFrame(i * frameDurationUs, isKey))
+        }
+        assertEquals(90, buffer.frameCount)
+
+        // 2. 카메라 재시작 등으로 PTS가 0으로 리셋된 새 프레임 추가
+        buffer.addFrame(createDummyFrame(0L, true))
+
+        // 3. PTS 역전 감지 시 기존 버퍼가 리셋되어 새 프레임 1개만 남아있어야 함
+        assertEquals(1, buffer.frameCount)
+        assertEquals(0L, buffer.dumpSlice(4.5f).first().presentationTimeUs)
+    }
 }
