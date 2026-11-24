@@ -10,7 +10,7 @@ import uuid
 from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from strikezone.judgment.video_pipeline import VideoPipeline, metadata, validate_config, read_video_frames
+from strikezone.judgment.video_pipeline import VideoPipeline, metadata, resolve_plate, validate_config, read_video_frames
 
 
 def main():
@@ -109,7 +109,7 @@ def main():
                     if not 0<length<=32768:raise ValueError('요청 크기 오류')
                     data=json.loads(self.rfile.read(length));uid=data['id']
                     if not re.fullmatch('[0-9a-f]{32}',uid):raise ValueError('잘못된 영상 ID')
-                    source=root/uid/'upload.mp4';validate_config(data,metadata(source))
+                    source=root/uid/'upload.mp4';m=metadata(source);resolve_plate(data,m);validate_config(data,m)
                     # Each run has its own directory; recalibration never overwrites a running job.
                     job=uuid.uuid4().hex;folder=root/job;folder.mkdir();jobs[job]={'status':'queued','message':'분석 대기'}
                     pool.submit(run_job,job,source,data,folder);return self.reply({'job':job},202)
