@@ -1,0 +1,4 @@
+{"example_only": true, "pitch_id": "20261201_s01_p001", "truth": "STRIKE", "labeler_a": "STRIKE", "labeler_b": "STRIKE", "umpire_call": null, "note": ""}
+{"example_only": true, "pitch_id": "20261201_s01_p002", "truth": "BALL", "labeler_a": "BALL", "labeler_b": "BALL", "umpire_call": "BALL", "note": ""}
+{"example_only": true, "pitch_id": "20261201_s01_p003", "truth": "SWING", "labeler_a": "SWING", "labeler_b": "SWING", "umpire_call": null, "note": "헛스윙"}
+{"example_only": true, "pitch_id": "20261201_s01_p004", "truth": "UNKNOWN", "labeler_a": "STRIKE", "labeler_b": "BALL", "umpire_call": null, "note": "라벨러 불일치"}
