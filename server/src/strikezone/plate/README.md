@@ -1,4 +1,6 @@
 # plate
 `detector.py`는 HSV·윤곽선 기반 홈플레이트 후보 검출, 수동 앞변 검증, Pose 높이와의 2D 존 배치 연결을 제공합니다. 자동 후보는 앞변이 미확정이므로 정상 검출로 승격하지 않습니다. 사용법과 6개 영상 결과는 [인식 실험 안내](../../../../docs/recognition.md)를 참고하세요.
 
+`homography.py`는 꼭짓점 4~5개로 지면 평면 Homography를 계산하고, 자동 후보가 홈플레이트 모양인지 검증해 제안합니다. [Homography 보정](../../../../docs/plate-homography.md)을 참고하세요.
+
 입출력은 [분석 계약 v1 초안](../../../../docs/analysis-contracts.md), 좌표·시간은 [공통 기준](../../../../docs/coordinates.md)을 참고합니다. 팀 리뷰 전 초안이며 실제 판정 정확도는 미검증입니다.

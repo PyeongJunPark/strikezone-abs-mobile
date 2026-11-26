@@ -14,6 +14,25 @@ from strikezone.ball.blur_size import perpendicular_width
 from strikezone.ball.track_filter import filter_track
 from strikezone.judgment.receiver_reference import prioritized_reference_call
 from strikezone.judgment.pose_session import PoseZoneSession
+from strikezone.plate.homography import fit_plate, summary as plate_summary
+
+PLATE_REASONS={'invalid_points':'꼭짓점 좌표 형식이 잘못되었습니다.','point_outside_image':'꼭짓점이 영상 밖에 있습니다.',
+               'front_corners_reversed':'앞변 왼쪽 점을 먼저 찍으세요.','front_edge_too_small':'홈플레이트 앞변이 너무 작습니다.',
+               'not_convex_or_wrong_order':'꼭짓점 순서가 잘못되었습니다. 앞왼쪽→앞오른쪽→오른쪽 어깨→뒤 꼭짓점→왼쪽 어깨 순으로 찍으세요.',
+               'degenerate_geometry':'꼭짓점이 한 줄에 놓여 있습니다.','plate_plane_crosses_horizon':'홈플레이트 평면을 계산할 수 없습니다.',
+               'shape_not_plate_like':'찍은 모양이 홈플레이트와 맞지 않습니다. 꼭짓점을 다시 확인하세요.'}
+
+
+def resolve_plate(config, meta):
+    """Optional 4~5 corner calibration. The front edge replaces plate_points."""
+    corners=config.get('plate_corners')
+    if corners is None:return None
+    if not isinstance(corners,list):raise ValueError(PLATE_REASONS['invalid_points'])
+    calibration=fit_plate(corners,(meta['width'],meta['height']))
+    if calibration['status']!='ok':
+        raise ValueError(PLATE_REASONS.get(calibration['reason'],'홈플레이트 꼭짓점 오류: '+str(calibration['reason'])))
+    config['plate_points']=[list(p) for p in calibration['front_edge_xy']]
+    return calibration
 
 
 def metadata(path):
@@ -71,7 +90,7 @@ class VideoPipeline:
 
     def run(self, source, config, output, progress=lambda value:None, cached_track=None, cached_detections=None):
         source=Path(source);output=Path(output);output.mkdir(parents=True,exist_ok=True)
-        meta=metadata(source);validate_config(config,meta)
+        meta=metadata(source);calibration=resolve_plate(config,meta);validate_config(config,meta)
         (output/'config.json').write_text(json.dumps(config,indent=2),encoding='utf8')
         w,h,fps=meta['width'],meta['height'],meta['fps'];trigger=config['trigger_frame']
         start=max(0,trigger-round(2*fps));stop=min(meta['frames'],trigger+round(4*fps))
@@ -142,15 +161,16 @@ class VideoPipeline:
             result=prioritized_reference_call(track,zone,fps,detections=detections or None,end_frame=stop,size_rows=sizes,image_size=(w,h))
             track=filter_track(original_track,fps)['track']
             result['input_track']=original_track
+        result['plate_calibration']=plate_summary(calibration) if calibration else None
         result.update(zone_session=session.snapshot(),metadata=meta,trigger_frame=trigger,clip_start_frame=start,clip_end_frame=stop,
                       track=track,pose_frames=poses,zone_frames=states,track_source='cached_reviewed_track' if cached_track is not None else 'fresh_model_detection',
                       manual_pitch_start=True,frame_read_mode='sequential_decode',selection_mode='manual_batter_roi' if config.get('batter_roi') else 'auto_heuristic',size_measurements=sizes)
         (output/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
         (output/'detections.json').write_text(json.dumps(detections),encoding='utf8')
-        self.render(images,poses,states,track,result,points,output,progress)
+        self.render(images,poses,states,track,result,points,output,progress,calibration)
         return result
 
-    def render(self,images,poses,states,track,result,plate,output,progress):
+    def render(self,images,poses,states,track,result,plate,output,progress,calibration=None):
         fps=result['metadata']['fps'];writer=cv2.VideoWriter(str(output/'render-temp.mp4'),cv2.VideoWriter_fourcc(*'mp4v'),fps,(1280,800))
         by={p['frame_index']:p for p in track};trail=[];last_pose=None;pose_frame=None
         excluded=set((result.get('event') or {}).get('excluded_tail_frames',[]))
@@ -158,6 +178,7 @@ class VideoPipeline:
         selected=result['position'];selected_frame=selected_overlay_frame(selected);poster_done=False
         for f,raw in images.items():
             im=raw.copy();state=states[f];zone=state['zone']
+            if calibration:cv2.polylines(im,[np.round(calibration['corners_xy']).astype(np.int32)],True,(255,120,0),1)
             cv2.line(im,tuple(map(round,plate[0])),tuple(map(round,plate[1])),(255,200,0),3)
             if zone:cv2.rectangle(im,tuple(map(round,zone[:2])),tuple(map(round,zone[2:])),(0,255,255),2)
             if f in poses:last_pose=poses[f]['pose'];pose_frame=f

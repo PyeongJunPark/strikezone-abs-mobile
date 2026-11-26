@@ -25,6 +25,8 @@
 | [공 검출 및 추적](ball-tracking.md) | YOLO(BaseballCV) 기반 공 검출 및 투구 궤적 추적 CLI | 공 추적 알고리즘(`track_ball.py`), 궤적 보간 및 탐색 박스 설정 시 |
 | [도착점 오검출 연결 보정](arrival-outlier-continuity.md) | 포구 직전 궤적 이상치 필터링 및 궤적 연속성 보정 | 홈플레이트 도달 직전 공 튀김/포수 미트 오검출 필터링 로직 수정 시 |
 | [단일 카메라 오프라인 참고 판정](reference-judgment.md) | 궤적과 고정 존을 비교하여 볼/스트라이크 판정하는 오프라인 로직 | 판정 로직(`judge_reference.py`), 경계선 판정 허용 오차(`boundary_hit`) 수정 시 |
+| [홈플레이트 Homography 보정](plate-homography.md) | 꼭짓점 5개 기반 지면 평면 변환, 자동 검출 후보 검증·제안 | 홈플레이트 꼭짓점 입력, 존 좌우 경계(cm) 계산, 촬영 구도 확인 시 |
+| [판정 정확도 평가](judgment-evaluation.md) | 정답 기준 제안(2인 독립 라벨), 라벨 형식, 평가 스크립트 | 100구 정확도 평가, 라벨링, 발표용 결과표 작성 시 |
 
 ---
 
