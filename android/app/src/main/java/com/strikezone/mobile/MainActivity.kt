@@ -20,7 +20,10 @@ import com.strikezone.mobile.camera.CameraCaptureManager
 import com.strikezone.mobile.encoder.EncodedFrame
 import com.strikezone.mobile.encoder.EncodedFrameListener
 import com.strikezone.mobile.encoder.VideoEncoder
-import com.strikezone.mobile.presentation.StreamingScreen
+import com.strikezone.mobile.network.ConnectionState
+import com.strikezone.mobile.network.TcpDumpClient
+import com.strikezone.mobile.network.TcpEventListener
+import com.strikezone.mobile.presentation.StreamingRoute
 import com.strikezone.mobile.presentation.StreamingUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -29,9 +32,9 @@ import kotlinx.coroutines.withContext
 /**
  * 스트존 모바일 진입점 액티비티.
  *
- * 카메라 캡처, MediaCodec 인코딩, 4.5초 원형 링 버퍼 및 MP4 패키징을 총괄합니다.
+ * 카메라 캡처, MediaCodec 인코딩, 4.5초 원형 링 버퍼 및 TCP DUMP 통신 파이프라인을 총괄합니다.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), TcpEventListener {
 
     companion object {
         private const val TAG = "MainActivity"
@@ -47,6 +50,9 @@ class MainActivity : ComponentActivity() {
     // 4.5초 덤프를 위해 6.0초 안전 마진을 유지하는 원형 링 버퍼
     private val circularBuffer = CircularVideoBuffer(bufferDurationSeconds = 6.0f)
     private lateinit var mp4Packager: Mp4Packager
+
+    // TCP 소켓 클라이언트 (DUMP 수신 및 MP4 송신)
+    private lateinit var tcpClient: TcpDumpClient
 
     private var totalEncodedFrames = 0L
     private var totalKeyFrames = 0L
@@ -71,10 +77,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mp4Packager = Mp4Packager(applicationContext)
+        tcpClient = TcpDumpClient(listener = this)
 
         setContent {
             MaterialTheme {
-                StreamingScreen(
+                StreamingRoute(
                     uiState = uiState.value,
                     onSurfaceCreated = { surface ->
                         currentPreviewSurface = surface
@@ -83,6 +90,12 @@ class MainActivity : ComponentActivity() {
                     onSurfaceDestroyed = {
                         currentPreviewSurface = null
                         releasePipeline()
+                    },
+                    onHostChanged = { newHost ->
+                        uiState.value = uiState.value.copy(serverHost = newHost)
+                    },
+                    onConnectToggleClick = {
+                        handleConnectToggle()
                     },
                     onTestDumpClick = {
                         triggerManualDumpTest()
@@ -222,7 +235,114 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 수동 4.5초 DUMP 테스트 트리거 (백그라운드 코루틴에서 실행).
+     * TCP 서버 연결/해제 토글.
+     */
+    private fun handleConnectToggle() {
+        if (tcpClient.state == ConnectionState.CONNECTED || tcpClient.state == ConnectionState.CONNECTING) {
+            tcpClient.disconnect()
+        } else {
+            val host = uiState.value.serverHost.trim()
+            val port = uiState.value.serverPort.toIntOrNull() ?: 9999
+            if (host.isEmpty()) {
+                Toast.makeText(this, "서버 IP 주소를 입력하세요.", Toast.LENGTH_SHORT).show()
+                return
+            }
+            tcpClient.connect(host, port, lifecycleScope)
+        }
+    }
+
+    // -------------------------------------------------------------
+    // TcpEventListener 구현부
+    // -------------------------------------------------------------
+
+    override fun onConnectionStateChanged(state: ConnectionState, message: String?) {
+        runOnUiThread {
+            uiState.value = uiState.value.copy(
+                connectionState = state,
+                connectionMessage = message ?: when (state) {
+                    ConnectionState.CONNECTED -> "서버 연결 완료"
+                    ConnectionState.CONNECTING -> "연결 시도 중..."
+                    ConnectionState.DISCONNECTED -> "연결 끊김"
+                    ConnectionState.ERROR -> "연결 오류"
+                }
+            )
+        }
+    }
+
+    /**
+     * 노트북의 DUMP 명령 수신 시 실행 (docs/protocol.md v2).
+     */
+    override fun onDumpRequested(durationSeconds: Float) {
+        val format = circularBuffer.outputFormat
+        if (format == null) {
+            Log.e(TAG, "DUMP 수신했으나 인코더 포맷이 준비되지 않음")
+            return
+        }
+
+        val rotationDegrees = cameraManager?.recordingRotationDegrees ?: 0
+
+        lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                val startMs = System.currentTimeMillis()
+                // 1. 4.5초 I-Frame 정렬 슬라이스 추출
+                val slice = circularBuffer.dumpSlice(durationSeconds)
+                if (slice.isEmpty()) {
+                    Log.w(TAG, "덤프할 프레임이 버퍼에 없음")
+                    return@launch
+                }
+
+                // 2. MP4 바이너리 파일 패키징
+                val mp4File = mp4Packager.packageToFile(slice, format, rotationDegrees)
+                try {
+                    val packageTimeMs = System.currentTimeMillis() - startMs
+
+                    // 3. TCP 소켓을 통해 바이너리 스트리밍 송신 (4바이트 크기 + 페이로드)
+                    if (!tcpClient.sendMp4File(mp4File)) {
+                        withContext(Dispatchers.Main) {
+                            uiState.value = uiState.value.copy(lastDumpInfo = "DUMP 송신 실패: 연결 상태를 확인하세요.")
+                        }
+                        return@launch
+                    }
+
+                    val totalElapsedMs = System.currentTimeMillis() - startMs
+                    val sliceDuration = (slice.last().presentationTimeUs - slice.first().presentationTimeUs) / 1_000_000f
+                    val sizeMb = mp4File.length() / (1024f * 1024f)
+
+                    val msg = String.format(
+                        "DUMP 송신 완료: %.1f초 (%.2fMB, %d프레임, 패키징=%dms, 총=%dms)",
+                        sliceDuration, sizeMb, slice.size, packageTimeMs, totalElapsedMs
+                    )
+                    Log.i(TAG, msg)
+
+                    withContext(Dispatchers.Main) {
+                        uiState.value = uiState.value.copy(lastDumpInfo = msg)
+                    }
+                } finally {
+                    if (mp4File.exists()) {
+                        mp4File.delete()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "DUMP 처리 및 송신 실패", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "DUMP 전송 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    override fun onPayloadSent(bytesSent: Long, elapsedMs: Long) {
+        Log.i(TAG, "MP4 바이너리 전송 완료: $bytesSent 바이트 ($elapsedMs ms)")
+    }
+
+    override fun onError(errorMessage: String) {
+        runOnUiThread {
+            Toast.makeText(this, errorMessage, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * 수동 4.5초 DUMP 로컬 테스트 트리거.
      */
     private fun triggerManualDumpTest() {
         val format = circularBuffer.outputFormat
@@ -252,14 +372,14 @@ class MainActivity : ComponentActivity() {
                     val isFirstKeyFrame = slice.first().isKeyFrame
 
                     val dumpResultMsg = String.format(
-                        "최근 덤프: %.1f초 클립 (%.2fMB, %d프레임, IDR시작=%b, 패키징 %dms 소요)",
+                        "로컬 덤프: %.1f초 클립 (%.2fMB, %d프레임, IDR=%b, %dms)",
                         sliceDuration, fileSizeMb, slice.size, isFirstKeyFrame, elapsedMs
                     )
 
                     Log.i(TAG, dumpResultMsg)
                     withContext(Dispatchers.Main) {
                         uiState.value = uiState.value.copy(lastDumpInfo = dumpResultMsg)
-                        Toast.makeText(this@MainActivity, "4.5초 MP4 덤프 성공! (${mp4File.length()} 바이트)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "로컬 덤프 생성 완료! (${mp4File.length()} 바이트)", Toast.LENGTH_SHORT).show()
                     }
                 } finally {
                     // 수동 테스트 확인 후 캐시 저장소 누수 방지를 위해 임시 파일 삭제
@@ -277,6 +397,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun releasePipeline() {
+        tcpClient.disconnect()
+
         cameraManager?.stopCamera()
         cameraManager = null
 
